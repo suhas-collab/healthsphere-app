@@ -1,0 +1,290 @@
+// Prisma Database Schema for Rural Public Healthcare MVP
+// Standards Alignment: Ayushman Bharat Digital Mission (ABDM) & HL7 FHIR R4 Specification
+// FHIR Resources mapped: Patient, Practitioner, Location/Organization, Encounter, Observation, ServiceRequest, MedicationRequest, InventoryReport
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./rural_health.db"
+}
+
+// -----------------------------------------------------------------------------
+// 1. PATIENT (FHIR Resource: Patient)
+// Represents a rural citizen registered under ABDM with ABHA ID & demographics
+// -----------------------------------------------------------------------------
+model Patient {
+  id               String   @id @default(cuid())
+  // FHIR: Patient.identifier (system: "https://healthid.ndhm.gov.in")
+  abhaId           String   @unique // 14-digit ABDM Ayushman Bharat Health Account (e.g., 91-4523-8891-2341)
+  abhaAddress      String?  // Optional ABHA address username (e.g. "priya.sharma@abdm")
+  abhaStatus       String   @default("VERIFIED") // VERIFIED | PENDING | UNLINKED
+
+  // FHIR: Patient.name, Patient.telecom, Patient.gender, Patient.birthDate
+  name             String
+  gender           String   // female | male | other
+  age              Int
+  birthDate        String?  // YYYY-MM-DD format
+  phone            String   // Telecom contact number
+  guardianName     String?  // Father / Husband / Guardian name
+
+  // FHIR: Patient.address (Rural Demographics Hierarchy)
+  village          String   // Rural habitation / Gram Panchayat
+  subCentre        String?  // Local Sub-centre catchment area
+  block            String   // Block / Taluk
+  district         String   // Administrative District
+  state            String   @default("Chhattisgarh")
+  pincode          String?  // Postal code
+
+  bloodGroup       String?  // A+, B+, AB+, O+, etc.
+
+  // Maternal & Child Health (MCH) Surveillance Flags
+  isPregnant       Boolean  @default(false)
+  gestationalWeeks Int?     // Number of gestational weeks (ANC tracking)
+  edd              String?  // Expected Date of Delivery (YYYY-MM-DD)
+  gravida          Int?     // Total number of pregnancies
+  parity           Int?     // Number of deliveries
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Relationships
+  encounters       Encounter[]
+  referrals        Referral[]
+  teleconsultations Teleconsultation[]
+  prescriptions    Prescription[]
+}
+
+// -----------------------------------------------------------------------------
+// 2. HEALTH WORKER (FHIR Resource: Practitioner & PractitionerRole)
+// Frontline ASHAs, ANMs at Sub-centres, Medical Officers (MO) at PHCs, and DHOs
+// -----------------------------------------------------------------------------
+model HealthWorker {
+  id               String   @id @default(cuid())
+  workerCode       String   @unique // e.g., "HW-ASHA-01", "HW-MO-02"
+  name             String
+  role             String   // "ASHA" | "ANM" | "MEDICAL_OFFICER" | "DISTRICT_HEALTH_OFFICER"
+  qualification    String?  // e.g., "Matriculation + ASHA Certification", "GNM Nurse", "MBBS, MD"
+  phone            String
+
+  facilityId       String
+  facility         Facility @relation(fields: [facilityId], references: [id])
+  isActive         Boolean  @default(true)
+
+  // Relationships
+  encountersRecorded    Encounter[]
+  referralsInitiated    Referral[]        @relation("ReferralInitiator")
+  teleconsultsRequested Teleconsultation[] @relation("TeleconsultRequestor")
+  teleconsultsAttended  Teleconsultation[] @relation("TeleconsultDoctor")
+  prescriptionsIssued   Prescription[]    @relation("DoctorPrescriptions")
+}
+
+// -----------------------------------------------------------------------------
+// 3. FACILITY (FHIR Resource: Location / Organization)
+// Tiered Indian Public Healthcare delivery facilities
+// -----------------------------------------------------------------------------
+model Facility {
+  id               String   @id @default(cuid())
+  code             String   @unique // e.g., "SC-BILASPUR-01", "PHC-RAMGARH", "DH-RAIPUR"
+  name             String
+  type             String   // "SUB_CENTRE" | "PHC" | "DISTRICT_HOSPITAL"
+  block            String
+  district         String
+  state            String   @default("Chhattisgarh")
+  catchmentPop     Int      @default(5000)
+  bedCapacity      Int      @default(2)
+  contactPhone     String?
+  latitude         Float?
+  longitude        Float?
+
+  // Relationships
+  workers              HealthWorker[]
+  encounters           Encounter[]
+  referralsOriginating Referral[]     @relation("ReferralSource")
+  referralsReceiving   Referral[]     @relation("ReferralTarget")
+  inventoryItems       Inventory[]
+}
+
+// -----------------------------------------------------------------------------
+// 4. ENCOUNTER & CLINICAL TRIAGE (FHIR Resource: Encounter + Observation)
+// Point-of-care screening records capturing vitals, complaints, and risk triage
+// -----------------------------------------------------------------------------
+model Encounter {
+  id                  String   @id @default(cuid())
+  encounterDate       DateTime @default(now()) // FHIR: Encounter.period.start
+  status              String   @default("COMPLETED") // TRIAGED | UNDER_REVIEW | REFERRED | RESOLVED
+
+  patientId           String
+  patient             Patient  @relation(fields: [patientId], references: [id])
+
+  healthWorkerId      String
+  healthWorker        HealthWorker @relation(fields: [healthWorkerId], references: [id])
+
+  facilityId          String
+  facility            Facility @relation(fields: [facilityId], references: [id])
+
+  // FHIR: Observation (Clinical Vitals)
+  temperatureF        Float?   // Body temperature (°F)
+  systolicBP          Int?     // Systolic Blood Pressure (mmHg)
+  diastolicBP         Int?     // Diastolic Blood Pressure (mmHg)
+  pulseRate           Int?     // Heart rate (beats/minute)
+  respiratoryRate     Int?     // Breaths/minute
+  spo2                Float?   // Oxygen Saturation (%)
+  bloodGlucoseMgDl    Float?   // Random blood glucose (mg/dL)
+  weightKg            Float?   // Body weight (kg)
+  heightCm            Float?   // Height (cm)
+
+  // Clinical Symptoms & Presentation
+  chiefComplaints     String   // Comma-separated or JSON list of complaints
+  durationDays        Int?     // Symptom duration in days
+  clinicalNotes       String?  // Frontline worker field observations
+
+  // Automated Clinical Risk Tagging (Red / Yellow / Green)
+  riskLevel           String   // "RED" (Emergency) | "YELLOW" (Moderate / Follow-up) | "GREEN" (Stable / Routine)
+  triageRationale     String?  // Clinical explanation generated for the risk assignment
+
+  // High-Risk Maternal & Child Care Surveillance
+  isHighRiskMaternal  Boolean  @default(false)
+  isHighRiskChild     Boolean  @default(false)
+  dangerSigns         String?  // e.g., "Severe pre-eclampsia, vaginal bleeding, lethargy"
+
+  // Downstream linkages
+  teleconsultation    Teleconsultation?
+  referral            Referral?
+  prescriptions       Prescription[]
+}
+
+// -----------------------------------------------------------------------------
+// 5. REFERRAL (FHIR Resource: ServiceRequest)
+// Downstream patient escalations from Sub-Centre -> PHC -> District Hospital
+// -----------------------------------------------------------------------------
+model Referral {
+  id                   String    @id @default(cuid())
+  referralCode         String    @unique // e.g. "REF-2026-0042"
+
+  patientId            String
+  patient              Patient   @relation(fields: [patientId], references: [id])
+
+  encounterId          String?   @unique
+  encounter            Encounter? @relation(fields: [encounterId], references: [id])
+
+  sourceFacilityId     String
+  sourceFacility       Facility  @relation("ReferralSource", fields: [sourceFacilityId], references: [id])
+
+  targetFacilityId     String
+  targetFacility       Facility  @relation("ReferralTarget", fields: [targetFacilityId], references: [id])
+
+  referringWorkerId    String
+  referringWorker      HealthWorker @relation("ReferralInitiator", fields: [referringWorkerId], references: [id])
+
+  priority             String    @default("ROUTINE") // "STAT" (Emergency) | "URGENT" | "ROUTINE"
+  reasonForReferral    String    // Clinical justification (FHIR: ServiceRequest.reasonCode)
+  clinicalSummary      String?   // Vitals, triage findings, and suspected diagnosis
+  preReferralTreatment String?   // Stabilizing emergency drugs given (e.g. IV fluids, MgSO4)
+
+  transportStatus      String    @default("NOT_REQUIRED") // "NOT_REQUIRED" | "AMBULANCE_DISPATCHED" | "IN_TRANSIT" | "ARRIVED"
+  status               String    @default("PENDING") // "PENDING" | "ACCEPTED" | "IN_TRANSIT" | "COMPLETED" | "REJECTED"
+
+  createdAt            DateTime  @default(now())
+  acceptedAt           DateTime?
+  completedAt          DateTime?
+  receivingNotes       String?   // Comments from receiving doctor at District Hospital
+}
+
+// -----------------------------------------------------------------------------
+// 6. TELECONSULTATION (FHIR Resource: Encounter [Virtual] / Communication)
+// Live remote consultation between frontline ASHA/ANM and PHC Medical Officer
+// -----------------------------------------------------------------------------
+model Teleconsultation {
+  id                   String    @id @default(cuid())
+  teleconsultId        String    @unique // e.g. "TC-2026-0108"
+
+  patientId            String
+  patient              Patient   @relation(fields: [patientId], references: [id])
+
+  encounterId          String?   @unique
+  encounter            Encounter? @relation(fields: [encounterId], references: [id])
+
+  requestingWorkerId   String
+  requestingWorker     HealthWorker @relation("TeleconsultRequestor", fields: [requestingWorkerId], references: [id])
+
+  doctorId             String?
+  doctor               HealthWorker? @relation("TeleconsultDoctor", fields: [doctorId], references: [id])
+
+  status               String    @default("REQUESTED") // "REQUESTED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED"
+  roomSessionId        String?   // WebRTC / Video call room link identifier
+
+  chiefComplaint       String    // Summary of symptoms for the MO
+  doctorDiagnosis      String?   // Doctor's clinical impression
+  doctorAdvice         String?   // Doctor's instructions to ASHA / patient
+
+  scheduledAt          DateTime  @default(now())
+  startedAt            DateTime?
+  endedAt              DateTime?
+  createdAt            DateTime  @default(now())
+
+  prescriptions        Prescription[]
+}
+
+// -----------------------------------------------------------------------------
+// 7. DIGITAL PRESCRIPTION (FHIR Resource: MedicationRequest)
+// Prescriptions issued by PHC Medical Officer after teleconsultation / review
+// -----------------------------------------------------------------------------
+model Prescription {
+  id                   String    @id @default(cuid())
+  prescriptionCode     String    @unique // e.g. "RX-2026-0812"
+
+  patientId            String
+  patient              Patient   @relation(fields: [patientId], references: [id])
+
+  encounterId          String?
+  encounter            Encounter? @relation(fields: [encounterId], references: [id])
+
+  teleconsultationId   String?
+  teleconsultation     Teleconsultation? @relation(fields: [teleconsultationId], references: [id])
+
+  doctorId             String
+  doctor               HealthWorker @relation("DoctorPrescriptions", fields: [doctorId], references: [id])
+
+  diagnosis            String    // Clinical diagnosis
+  advice               String?   // Diet, rest, and follow-up advice
+  digitalSignature     String    // Doctor's cryptographic / digital verification seal
+  issuedAt             DateTime  @default(now())
+
+  items                PrescriptionItem[]
+}
+
+model PrescriptionItem {
+  id                   String       @id @default(cuid())
+  prescriptionId       String
+  prescription         Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+
+  medicineName         String       // e.g. "Amoxicillin 500mg", "Paracetamol 650mg"
+  dosage               String       // e.g. "1 tablet", "5 ml"
+  frequency            String       // e.g. "1-0-1 (Twice daily after food)"
+  durationDays         Int          // e.g. 5
+  instructions         String?      // e.g. "Complete entire antibiotic course"
+}
+
+// -----------------------------------------------------------------------------
+// 8. INVENTORY & STOCK LEVELS (FHIR Resource: InventoryReport / MedicationKnowledge)
+// Facility-level medicine stock with automatic stockout detection
+// -----------------------------------------------------------------------------
+model Inventory {
+  id                   String   @id @default(cuid())
+  facilityId           String
+  facility             Facility @relation(fields: [facilityId], references: [id])
+
+  medicineName         String   // e.g. "Oxytocin 10 IU Injection", "Iron Folic Acid (IFA)"
+  category             String   // "MATERNAL_CHILD" | "ANTIBIOTIC" | "ANALGESIC" | "NCD_CHRONIC" | "EMERGENCY_INJECTABLE" | "VACCINE"
+  batchNumber          String
+  currentStock         Int
+  minimumThreshold     Int      // Minimum safety stock level
+  unit                 String   // "VIALS" | "TABLETS" | "STRIPS" | "BOTTLES"
+  expiryDate           String   // YYYY-MM-DD
+  isStockout           Boolean  @default(false) // Automatically flagged if stock <= threshold
+
+  updatedAt            DateTime @updatedAt
+}
