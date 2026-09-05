@@ -3,7 +3,24 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 async function main() {
-  console.log('🌱 Clearing existing rural healthcare database tables...');
+  // Production Safety Guard: prevent destructive deleteMany() on live databases
+  const isProduction = process.env.NODE_ENV === 'production';
+  const forceSeed = process.env.FORCE_SEED === 'true';
+
+  if (isProduction && !forceSeed) {
+    console.error('⛔ SAFETY GUARD: Seeding aborted. Cannot run destructive seed script in production without FORCE_SEED=true.');
+    process.exit(1);
+  }
+
+  // Check if live data already exists
+  const existingPatients = await prisma.patient.count();
+  if (existingPatients > 0 && !forceSeed) {
+    console.warn(`⚠️ SAFETY GUARD: Database already contains ${existingPatients} patient records.`);
+    console.warn('Seeding was safely aborted to prevent data loss. To force re-seeding and overwrite, set FORCE_SEED=true.');
+    return;
+  }
+
+  console.log('🌱 Clearing existing rural healthcare database tables (FORCE_SEED or clean database)...');
   await prisma.prescriptionItem.deleteMany();
   await prisma.prescription.deleteMany();
   await prisma.teleconsultation.deleteMany();
@@ -13,6 +30,7 @@ async function main() {
   await prisma.healthWorker.deleteMany();
   await prisma.patient.deleteMany();
   await prisma.facility.deleteMany();
+
 
   console.log('🏥 Creating Healthcare Facilities (Sub-centre, PHC, District Hospital)...');
   const subCentre = await prisma.facility.create({

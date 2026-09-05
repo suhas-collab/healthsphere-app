@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { requireAuth } from '@/lib/auth/guards';
 
 export async function POST(req: NextRequest) {
+  // Offline sync queue restricted to frontline ASHAs, ANMs, and Admins
+  const { errorResponse } = await requireAuth(req, ['ASHA', 'ANM', 'ADMIN']);
+  if (errorResponse) return errorResponse;
+
   try {
     const body = await req.json();
     const items = body.items || [];

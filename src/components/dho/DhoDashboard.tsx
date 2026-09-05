@@ -20,6 +20,7 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
+import { getAuthHeaders } from '@/lib/auth/client';
 
 interface DashboardData {
   metrics: {
@@ -45,17 +46,25 @@ interface DashboardData {
 export default function DhoDashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'referrals' | 'stockouts' | 'mch'>('overview');
   const [replenishingId, setReplenishingId] = useState<string | null>(null);
 
   const fetchDashboard = async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/dashboard');
+      setError(null);
+      const res = await fetch('/api/dashboard', {
+        headers: getAuthHeaders('DISTRICT_HEALTH_OFFICER'),
+      });
       const json = await res.json();
+      if (!res.ok || !json.metrics) {
+        throw new Error(json.error || `Failed to fetch dashboard metrics (Status: ${res.status})`);
+      }
       setData(json);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error fetching DHO dashboard data:', err);
+      setError(err.message || 'An unexpected error occurred while communicating with the health server.');
     } finally {
       setLoading(false);
     }
@@ -71,7 +80,7 @@ export default function DhoDashboard() {
       setReplenishingId(itemId);
       await fetch('/api/inventory', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders('DISTRICT_HEALTH_OFFICER'),
         body: JSON.stringify({ id: itemId, replenishQuantity: 100 }),
       });
       confetti({ particleCount: 60, spread: 60 });
@@ -83,7 +92,7 @@ export default function DhoDashboard() {
     }
   };
 
-  if (loading || !data) {
+  if (loading && !data) {
     return (
       <div style={{ textAlign: 'center', padding: '60px', color: 'var(--slate-500)' }}>
         <RefreshCw size={28} className="animate-spin" style={{ animation: 'spin 1s linear infinite', margin: '0 auto 12px auto' }} />
@@ -92,7 +101,70 @@ export default function DhoDashboard() {
     );
   }
 
-  const { metrics, activeReferrals, stockoutItems, maternalFollowups, childFollowups, facilities } = data;
+  if (error && !data) {
+    return (
+      <div style={{ maxWidth: '800px', margin: '60px auto', padding: '36px', textAlign: 'center' }} className="glass-panel">
+        <div
+          style={{
+            width: '64px',
+            height: '64px',
+            borderRadius: '50%',
+            background: 'rgba(239, 68, 68, 0.12)',
+            color: 'var(--danger, #ef4444)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            margin: '0 auto 16px auto',
+          }}
+        >
+          <AlertOctagon size={36} />
+        </div>
+        <h2 style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--slate-900)', marginBottom: '8px' }}>
+          District Command Intelligence Unavailable
+        </h2>
+        <p style={{ color: 'var(--slate-600)', marginBottom: '24px', fontSize: '0.95rem', lineHeight: '1.5' }}>
+          {error}
+        </p>
+        <button
+          onClick={fetchDashboard}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '10px 24px',
+            backgroundColor: 'var(--primary)',
+            color: '#ffffff',
+            borderRadius: 'var(--radius-md)',
+            border: 'none',
+            fontWeight: 600,
+            cursor: 'pointer',
+            boxShadow: '0 4px 12px var(--primary-glow)',
+          }}
+        >
+          <RefreshCw size={16} /> Retry Connection
+        </button>
+      </div>
+    );
+  }
+
+  const metrics = data?.metrics || {
+    totalPatients: 0,
+    totalEncounters: 0,
+    redEncounters: 0,
+    yellowEncounters: 0,
+    greenEncounters: 0,
+    redPercentage: 0,
+    activeReferralsCount: 0,
+    totalReferralsCount: 0,
+    stockoutAlertsCount: 0,
+    highRiskMaternalCount: 0,
+    highRiskChildCount: 0,
+  };
+  const activeReferrals = data?.activeReferrals || [];
+  const stockoutItems = data?.stockoutItems || [];
+  const maternalFollowups = data?.maternalFollowups || [];
+  const childFollowups = data?.childFollowups || [];
+  const facilities = data?.facilities || [];
 
   return (
     <div style={{ maxWidth: '1280px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '22px' }}>

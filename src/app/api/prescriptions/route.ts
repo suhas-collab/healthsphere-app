@@ -1,7 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { requireAuth } from '@/lib/auth/guards';
 
 export async function GET(req: NextRequest) {
+  const { errorResponse } = await requireAuth(req, [
+    'ASHA',
+    'ANM',
+    'MEDICAL_OFFICER',
+    'DISTRICT_HEALTH_OFFICER',
+    'ADMIN',
+  ]);
+  if (errorResponse) return errorResponse;
+
   try {
     const { searchParams } = new URL(req.url);
     const patientId = searchParams.get('patientId');
@@ -22,11 +32,16 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ prescriptions });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    console.error('Error fetching prescriptions:', err);
+    return NextResponse.json({ error: err?.message || 'Failed to fetch prescriptions' }, { status: 500 });
   }
 }
 
 export async function POST(req: NextRequest) {
+  // Only licensed Medical Officers and Admins can sign and issue prescriptions
+  const { errorResponse } = await requireAuth(req, ['MEDICAL_OFFICER', 'ADMIN']);
+  if (errorResponse) return errorResponse;
+
   try {
     const body = await req.json();
     const { patientId, doctorId, encounterId, teleconsultationId, diagnosis, advice, items } = body;
@@ -88,6 +103,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ prescription }, { status: 201 });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    console.error('Error creating prescription:', err);
+    return NextResponse.json({ error: err?.message || 'Failed to create prescription' }, { status: 500 });
   }
 }

@@ -230,7 +230,7 @@ export default function FhirSchemaExplorer() {
                   <div style={{ fontWeight: 700, color: 'var(--slate-800)', marginBottom: '4px' }}>
                     Offline-First Dexie.js Mechanics:
                   </div>
-                  Frontline health workers can create and modify {m.prismaEntity} instances locally in Dexie IndexedDB when off-grid. When connectivity returns, the SyncEngine dispatches batch payloads to <code style={{ color: 'var(--primary)' }}>/api/sync</code> for idempotent upserting into the SQLite/Prisma backend.
+                  Frontline health workers can create and modify {m.prismaEntity} instances locally in Dexie IndexedDB when off-grid. When connectivity returns, the SyncEngine dispatches batch payloads to <code style={{ color: 'var(--primary)' }}>/api/sync</code> for idempotent upserting into the PostgreSQL/Prisma backend.
                 </div>
               </>
             );

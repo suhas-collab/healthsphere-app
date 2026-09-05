@@ -26,6 +26,7 @@ import {
   Filter,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
+import { getAuthHeaders } from '@/lib/auth/client';
 
 interface Patient {
   id: string;
@@ -157,12 +158,13 @@ export default function DoctorPortal() {
   const fetchData = async () => {
     try {
       setLoading(true);
+      const headers = getAuthHeaders('MEDICAL_OFFICER');
       const [encRes, teleRes, rxRes, refRes, invRes] = await Promise.all([
-        fetch('/api/encounters'),
-        fetch('/api/teleconsult'),
-        fetch('/api/prescriptions'),
-        fetch('/api/referrals'),
-        fetch('/api/inventory'),
+        fetch('/api/encounters', { headers }),
+        fetch('/api/teleconsult', { headers }),
+        fetch('/api/prescriptions', { headers }),
+        fetch('/api/referrals', { headers }),
+        fetch('/api/inventory', { headers }),
       ]);
 
       const [encData, teleData, rxData, refData, invData] = await Promise.all([
@@ -218,7 +220,7 @@ export default function DoctorPortal() {
     try {
       await fetch('/api/teleconsult', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders('MEDICAL_OFFICER'),
         body: JSON.stringify({
           action: 'UPDATE_STATUS',
           id: tc.id,
@@ -249,7 +251,7 @@ export default function DoctorPortal() {
     try {
       await fetch('/api/teleconsult', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders('MEDICAL_OFFICER'),
         body: JSON.stringify({
           action: 'UPDATE_STATUS',
           id: activeCall.id,
@@ -281,7 +283,7 @@ export default function DoctorPortal() {
     try {
       const res = await fetch('/api/prescriptions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders('MEDICAL_OFFICER'),
         body: JSON.stringify({
           patientId: selectedPatientForRx.id,
           doctorId: 'HW-MO-001',
@@ -322,7 +324,7 @@ export default function DoctorPortal() {
     try {
       const res = await fetch('/api/referrals', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders('MEDICAL_OFFICER'),
         body: JSON.stringify({
           patientId: selectedPatientForRef.id,
           sourceFacilityId: 'PHC-RAMGARH', // Ramgarh PHC
@@ -356,7 +358,7 @@ export default function DoctorPortal() {
     try {
       await fetch('/api/referrals', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders('MEDICAL_OFFICER'),
         body: JSON.stringify({ id, status: newStatus }),
       });
       fetchData();

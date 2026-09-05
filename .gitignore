@@ -4,3 +4,12 @@ node_modules/
 .env.local
 .env.*.local
 *.tsbuildinfo
+
+# Databases and backups
+*.db
+*.db-journal
+*.sqlite
+prisma/sqlite_data_backup.json
+.vercel
+.env*
+!.env.example

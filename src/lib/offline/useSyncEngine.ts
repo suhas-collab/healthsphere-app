@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { offlineDb, LocalPatient, LocalEncounter, SyncQueueItem } from './db';
+import { getAuthHeaders } from '@/lib/auth/client';
 
 export interface SyncEngineState {
   isOnline: boolean;
@@ -57,7 +58,7 @@ export function useSyncEngine(): SyncEngineState {
       // Send to server /api/sync
       const response = await fetch('/api/sync', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders('ASHA'),
         body: JSON.stringify({ items: pendingItems }),
       });
 

@@ -1,7 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { requireAuth } from '@/lib/auth/guards';
 
 export async function GET(req: NextRequest) {
+  const { errorResponse } = await requireAuth(req, [
+    'ASHA',
+    'ANM',
+    'MEDICAL_OFFICER',
+    'DISTRICT_HEALTH_OFFICER',
+    'ADMIN',
+  ]);
+  if (errorResponse) return errorResponse;
+
   try {
     const { searchParams } = new URL(req.url);
     const status = searchParams.get('status');
@@ -23,11 +33,20 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ referrals });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    console.error('Error fetching referrals:', err);
+    return NextResponse.json({ error: err?.message || 'Failed to fetch referrals' }, { status: 500 });
   }
 }
 
 export async function POST(req: NextRequest) {
+  const { errorResponse } = await requireAuth(req, [
+    'ASHA',
+    'ANM',
+    'MEDICAL_OFFICER',
+    'ADMIN',
+  ]);
+  if (errorResponse) return errorResponse;
+
   try {
     const body = await req.json();
 
@@ -57,11 +76,19 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ referral }, { status: 201 });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    console.error('Error creating referral:', err);
+    return NextResponse.json({ error: err?.message || 'Failed to create referral' }, { status: 500 });
   }
 }
 
 export async function PATCH(req: NextRequest) {
+  const { errorResponse } = await requireAuth(req, [
+    'MEDICAL_OFFICER',
+    'DISTRICT_HEALTH_OFFICER',
+    'ADMIN',
+  ]);
+  if (errorResponse) return errorResponse;
+
   try {
     const body = await req.json();
     const { id, status, transportStatus, receivingNotes } = body;
@@ -87,6 +114,7 @@ export async function PATCH(req: NextRequest) {
 
     return NextResponse.json({ referral: updated });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    console.error('Error updating referral:', err);
+    return NextResponse.json({ error: err?.message || 'Failed to update referral' }, { status: 500 });
   }
 }

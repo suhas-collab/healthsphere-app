@@ -1,7 +1,12 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { requireAuth } from '@/lib/auth/guards';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  // District-wide surveillance command dashboard requires DHO or Admin role
+  const { errorResponse } = await requireAuth(req, ['DISTRICT_HEALTH_OFFICER', 'ADMIN']);
+  if (errorResponse) return errorResponse;
+
   try {
     const [
       totalPatients,
@@ -102,6 +107,7 @@ export async function GET() {
       facilities,
     });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    console.error('Error fetching dashboard surveillance metrics:', err);
+    return NextResponse.json({ error: err?.message || 'Failed to fetch dashboard metrics' }, { status: 500 });
   }
 }

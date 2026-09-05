@@ -1,7 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { requireAuth } from '@/lib/auth/guards';
 
 export async function GET(req: NextRequest) {
+  const { errorResponse } = await requireAuth(req, [
+    'ASHA',
+    'ANM',
+    'MEDICAL_OFFICER',
+    'DISTRICT_HEALTH_OFFICER',
+    'ADMIN',
+  ]);
+  if (errorResponse) return errorResponse;
+
   try {
     const { searchParams } = new URL(req.url);
     const q = searchParams.get('q');
@@ -44,6 +54,14 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const { errorResponse } = await requireAuth(req, [
+    'ASHA',
+    'ANM',
+    'MEDICAL_OFFICER',
+    'ADMIN',
+  ]);
+  if (errorResponse) return errorResponse;
+
   try {
     const body = await req.json();
 

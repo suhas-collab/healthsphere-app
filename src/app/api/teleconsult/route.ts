@@ -1,7 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { requireAuth } from '@/lib/auth/guards';
 
 export async function GET(req: NextRequest) {
+  const { errorResponse } = await requireAuth(req, [
+    'ASHA',
+    'ANM',
+    'MEDICAL_OFFICER',
+    'DISTRICT_HEALTH_OFFICER',
+    'ADMIN',
+  ]);
+  if (errorResponse) return errorResponse;
+
   try {
     const teleconsults = await prisma.teleconsultation.findMany({
       include: {
@@ -20,7 +30,8 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ teleconsultations: teleconsults });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    console.error('Error fetching teleconsultations:', err);
+    return NextResponse.json({ error: err?.message || 'Failed to fetch teleconsultations' }, { status: 500 });
   }
 }
 
@@ -28,6 +39,14 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const { action, id, status, doctorDiagnosis, doctorAdvice, doctorId } = body;
+
+    // Doctor/Admin required for updating status/diagnosis, frontline allowed to request
+    const allowedRoles = action === 'UPDATE_STATUS'
+      ? ['MEDICAL_OFFICER', 'ADMIN']
+      : ['ASHA', 'ANM', 'MEDICAL_OFFICER', 'ADMIN'];
+
+    const { errorResponse } = await requireAuth(req, allowedRoles as any);
+    if (errorResponse) return errorResponse;
 
     if (action === 'UPDATE_STATUS' && id) {
       const updated = await prisma.teleconsultation.update({
@@ -72,6 +91,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ teleconsultation: teleconsult }, { status: 201 });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    console.error('Error creating/updating teleconsultation:', err);
+    return NextResponse.json({ error: err?.message || 'Failed to process teleconsultation' }, { status: 500 });
   }
 }
