@@ -11,6 +11,7 @@ import {
   Share2,
   BookOpen,
 } from 'lucide-react';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
 
 const FHIR_MAPPINGS = [
   {
@@ -80,6 +81,7 @@ const FHIR_MAPPINGS = [
 ];
 
 export default function FhirSchemaExplorer() {
+  const { t } = useLanguage();
   const [selectedMapping, setSelectedMapping] = useState<number>(0);
 
   return (
@@ -103,10 +105,10 @@ export default function FhirSchemaExplorer() {
           </div>
           <div>
             <div style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--slate-900)' }}>
-              FHIR R4 Alignment & ABDM Data Architecture Explorer
+              {t.schema.techTitle}
             </div>
             <div style={{ fontSize: '0.85rem', color: 'var(--slate-600)' }}>
-              Explore the database schema, HL7 FHIR R4 resource mappings, and offline synchronization topology.
+              {t.schema.techSubtitle}
             </div>
           </div>
         </div>

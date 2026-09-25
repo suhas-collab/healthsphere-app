@@ -1,35 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth/guards';
+import { clinicalData } from '@/lib/clinicalData';
 
 export async function GET(req: NextRequest) {
-  const { errorResponse } = await requireAuth(req, [
+  const { user, errorResponse } = await requireAuth(req, [
     'ASHA',
     'ANM',
     'MEDICAL_OFFICER',
     'DISTRICT_HEALTH_OFFICER',
     'ADMIN',
+    'PATIENT',
   ]);
   if (errorResponse) return errorResponse;
 
   try {
     const { searchParams } = new URL(req.url);
-    const patientId = searchParams.get('patientId');
+    const requestedPatientId = searchParams.get('patientId');
 
-    const where: any = {};
-    if (patientId) where.patientId = patientId;
+    // IDOR Protection: Patient can only access their own prescriptions
+    if (user?.role === 'PATIENT') {
+      const authPatientId = user.patientId;
+      if (requestedPatientId && authPatientId && requestedPatientId !== authPatientId) {
+        return NextResponse.json(
+          { error: "Forbidden: You are not authorized to view another patient's prescriptions" },
+          { status: 403 }
+        );
+      }
+      const effectivePatientId = requestedPatientId || authPatientId;
+      const prescriptions = await clinicalData.getPrescriptions(effectivePatientId);
+      return NextResponse.json({ prescriptions });
+    }
 
-    const prescriptions = await prisma.prescription.findMany({
-      where,
-      include: {
-        patient: true,
-        doctor: true,
-        items: true,
-        teleconsultation: true,
-      },
-      orderBy: { issuedAt: 'desc' },
-    });
-
+    const prescriptions = await clinicalData.getPrescriptions(requestedPatientId);
     return NextResponse.json({ prescriptions });
   } catch (err: any) {
     console.error('Error fetching prescriptions:', err);
@@ -38,69 +40,12 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  // Only licensed Medical Officers and Admins can sign and issue prescriptions
   const { errorResponse } = await requireAuth(req, ['MEDICAL_OFFICER', 'ADMIN']);
   if (errorResponse) return errorResponse;
 
   try {
     const body = await req.json();
-    const { patientId, doctorId, encounterId, teleconsultationId, diagnosis, advice, items } = body;
-
-    const prescriptionCode = `RX-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-    const digitalSignature = `VERIFIED_MD_${doctorId || 'PHC_MO'}_${Date.now().toString(36).toUpperCase()}_DIGISEAL`;
-
-    const prescription = await prisma.prescription.create({
-      data: {
-        prescriptionCode,
-        patientId,
-        doctorId,
-        encounterId: encounterId || null,
-        teleconsultationId: teleconsultationId || null,
-        diagnosis: diagnosis || 'Clinical Observation',
-        advice: advice || 'Follow instructions on dosage and return if symptoms persist.',
-        digitalSignature,
-        items: {
-          create: (items || []).map((item: any) => ({
-            medicineName: item.medicineName,
-            dosage: item.dosage || '1 tablet',
-            frequency: item.frequency || '1-0-1',
-            durationDays: parseInt(item.durationDays) || 5,
-            instructions: item.instructions || '',
-          })),
-        },
-      },
-      include: {
-        patient: true,
-        doctor: true,
-        items: true,
-      },
-    });
-
-    // Optionally deduct inventory stock if match found
-    if (items && Array.isArray(items)) {
-      for (const item of items) {
-        try {
-          const inv = await prisma.inventory.findFirst({
-            where: {
-              medicineName: { contains: item.medicineName.split(' ')[0] },
-            },
-          });
-          if (inv && inv.currentStock > 0) {
-            const newStock = Math.max(0, inv.currentStock - 1);
-            await prisma.inventory.update({
-              where: { id: inv.id },
-              data: {
-                currentStock: newStock,
-                isStockout: newStock <= inv.minimumThreshold,
-              },
-            });
-          }
-        } catch (invErr) {
-          console.warn('Inventory update skip:', invErr);
-        }
-      }
-    }
-
+    const prescription = await clinicalData.createPrescription(body);
     return NextResponse.json({ prescription }, { status: 201 });
   } catch (err: any) {
     console.error('Error creating prescription:', err);

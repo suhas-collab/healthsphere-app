@@ -1,11 +1,10 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Heart,
   Activity,
   Thermometer,
-  Wind,
   Droplets,
   AlertTriangle,
   CheckCircle,
@@ -13,19 +12,31 @@ import {
   WifiOff,
   RefreshCw,
   UserPlus,
-  ClipboardList,
-  Database,
+  Search,
   Phone,
-  Smartphone,
-  Maximize2,
   Calendar,
   Send,
-  Baby,
+  UserCheck,
+  CheckCircle2,
+  Clock,
+  ChevronRight,
+  X,
+  Stethoscope,
+  ArrowRight,
   ShieldAlert,
+  AlertCircle,
+  FileText,
+  User,
+  MapPin,
+  Pill,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { useSyncEngine } from '@/lib/offline/useSyncEngine';
 import { offlineDb, evaluateClinicalRisk, LocalPatient, LocalEncounter } from '@/lib/offline/db';
+import { getAuthHeaders } from '@/lib/auth/client';
+import { useLanguage } from '@/lib/i18n/LanguageContext';
+import SpeakButton from '@/components/common/SpeakButton';
+import { DEMO_PATIENTS, DEMO_ENCOUNTERS } from '@/lib/demoData';
 
 const COMMON_COMPLAINTS = [
   'High Grade Fever (>3 days)',
@@ -54,1123 +65,1354 @@ export default function AshaPortal() {
     saveLocalEncounter,
   } = useSyncEngine();
 
-  // View mode: simulated phone frame vs full screen
-  const [isPhoneFrame, setIsPhoneFrame] = useState<boolean>(true);
-  const [activeTab, setActiveTab] = useState<'triage' | 'register' | 'offline_vault'>('triage');
+  const { language, t, getSymptomLabel, speakText } = useLanguage();
+  const isMarathi = language === 'mr';
 
-  // Local state for registered patients
-  const [localPatients, setLocalPatients] = useState<LocalPatient[]>([]);
-  const [vaultEncounters, setVaultEncounters] = useState<LocalEncounter[]>([]);
-  const [selectedPatientId, setSelectedPatientId] = useState<string>('');
+  // Navigation mode: 'my_care' | 'find_patient' | 'register_patient' | 'record_case'
+  const [activeMode, setActiveMode] = useState<'my_care' | 'find_patient' | 'register_patient' | 'record_case'>('my_care');
+
+  // Care status filter: 'ALL' | 'WAITING_FOR_DOCTOR' | 'DOCTOR_REVIEWING' | 'DOCTOR_RESPONDED' | 'FOLLOWUP_REQUIRED' | 'COMPLETED'
+  const [statusFilter, setStatusFilter] = useState<string>('ALL');
+
+  // Patients and Cases (Pre-populated synchronously with realistic demo dataset)
+  const [patients, setPatients] = useState<LocalPatient[]>(DEMO_PATIENTS as any);
+  const [encounters, setEncounters] = useState<any[]>(DEMO_ENCOUNTERS);
+  const [careListPatientIds, setCareListPatientIds] = useState<string[]>([
+    'pat-1',
+    'pat-001',
+    'pat-003',
+    'pat-005',
+    'pat-004',
+  ]);
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [selectedPatient, setSelectedPatient] = useState<LocalPatient | null>(null);
+  const [selectedCaseModal, setSelectedCaseModal] = useState<any | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Triage Form State
-  const [tempF, setTempF] = useState<string>('98.6');
-  const [systolicBP, setSystolicBP] = useState<string>('120');
-  const [diastolicBP, setDiastolicBP] = useState<string>('80');
-  const [pulseRate, setPulseRate] = useState<string>('76');
-  const [spo2, setSpo2] = useState<string>('98');
-  const [respRate, setRespRate] = useState<string>('18');
-  const [bloodSugar, setBloodSugar] = useState<string>('');
-  const [selectedComplaints, setSelectedComplaints] = useState<string[]>([]);
-  const [durationDays, setDurationDays] = useState<string>('2');
-  const [clinicalNotes, setClinicalNotes] = useState<string>('');
-
-  // Maternal & Child Checks
-  const [isPregnantCheck, setIsPregnantCheck] = useState<boolean>(false);
-  const [gestationalWeeks, setGestationalWeeks] = useState<string>('28');
-  const [isChildCheck, setIsChildCheck] = useState<boolean>(false);
-
-  // Registration Form State
-  const [regName, setRegName] = useState<string>('');
-  const [regAbha, setRegAbha] = useState<string>('');
-  const [regAge, setRegAge] = useState<string>('');
+  // New Patient Registration Form
+  const [regName, setRegName] = useState('');
+  const [regAge, setRegAge] = useState('');
   const [regGender, setRegGender] = useState<'female' | 'male' | 'other'>('female');
-  const [regPhone, setRegPhone] = useState<string>('');
-  const [regGuardian, setRegGuardian] = useState<string>('');
-  const [regVillage, setRegVillage] = useState<string>('Bilaspur Gram');
-  const [regBloodGroup, setRegBloodGroup] = useState<string>('B+');
-  const [regIsPregnant, setRegIsPregnant] = useState<boolean>(false);
-  const [regWeeks, setRegWeeks] = useState<string>('');
-  const [regEdd, setRegEdd] = useState<string>('');
+  const [regPhone, setRegPhone] = useState('');
+  const [regVillage, setRegVillage] = useState('Sakarra');
+  const [regGuardian, setRegGuardian] = useState('');
+  const [regBloodGroup, setRegBloodGroup] = useState('B+');
+  const [regIsPregnant, setRegIsPregnant] = useState(false);
+  const [regWeeks, setRegWeeks] = useState('24');
+  const [regEdd, setRegEdd] = useState('');
+  const [isSubmittingPatient, setIsSubmittingPatient] = useState(false);
 
-  // Toast / notification
-  const [toastMsg, setToastMsg] = useState<{ type: 'success' | 'alert'; text: string } | null>(null);
+  // Clinical Symptoms & Vitals Form
+  const [selectedSymptoms, setSelectedSymptoms] = useState<string[]>([]);
+  const [durationDays, setDurationDays] = useState('2');
+  const [tempF, setTempF] = useState('99.0');
+  const [systolicBP, setSystolicBP] = useState('120');
+  const [diastolicBP, setDiastolicBP] = useState('80');
+  const [pulseRate, setPulseRate] = useState('76');
+  const [spo2, setSpo2] = useState('98');
+  const [clinicalNotes, setClinicalNotes] = useState('');
+  const [urgencyOverride, setUrgencyOverride] = useState<'RED' | 'YELLOW' | 'GREEN'>('GREEN');
+  const [isSubmittingCase, setIsSubmittingCase] = useState(false);
 
-  const showToast = (text: string, type: 'success' | 'alert' = 'success') => {
-    setToastMsg({ text, type });
-    setTimeout(() => setToastMsg(null), 4000);
-  };
-
-  // Load patients and encounters from Dexie
-  const loadLocalData = async () => {
+  // Load data from Dexie & Server (Background silent merge)
+  const loadData = async () => {
     try {
-      const pats = await offlineDb.patients.toArray();
-      setLocalPatients(pats);
-      if (pats.length > 0 && !selectedPatientId) {
-        setSelectedPatientId(pats[0].id);
-        setIsPregnantCheck(pats[0].isPregnant);
-      }
+      const localPats = await offlineDb.patients.toArray();
+      const localEncs = await offlineDb.triageEncounters.toArray();
 
-      const encs = await offlineDb.triageEncounters.orderBy('encounterDate').reverse().toArray();
-      setVaultEncounters(encs);
+      // If online, fetch latest from server
+      if (typeof window !== 'undefined' && navigator.onLine) {
+        try {
+          const headers = getAuthHeaders('ASHA');
+          const [serverPatRes, serverEncRes] = await Promise.all([
+            fetch('/api/patients', { headers }),
+            fetch('/api/encounters', { headers }),
+          ]);
+          if (serverPatRes.ok) {
+            const data = await serverPatRes.json();
+            const serverPatients: LocalPatient[] = data.patients || [];
+            // Merge unique, preserving demo records
+            const map = new Map<string, LocalPatient>();
+            DEMO_PATIENTS.forEach((p: any) => map.set(p.id, p));
+            localPats.forEach((p) => map.set(p.id, p));
+            serverPatients.forEach((p) => map.set(p.id, p));
+            setPatients(Array.from(map.values()));
+          }
+
+          if (serverEncRes.ok) {
+            const data = await serverEncRes.json();
+            const serverEncs = data.encounters || [];
+            const encMap = new Map<string, any>();
+            DEMO_ENCOUNTERS.forEach((e) => encMap.set(e.id, e));
+            localEncs.forEach((e) => encMap.set(e.id, e));
+            serverEncs.forEach((e: any) => encMap.set(e.id, e));
+            setEncounters(Array.from(encMap.values()));
+          }
+        } catch {
+          // Keep existing populated data
+        }
+      }
     } catch (e) {
-      console.error('Dexie load error:', e);
+      console.error('Error loading ASHA data:', e);
     }
   };
 
   useEffect(() => {
-    loadLocalData();
-  }, [pendingCount]);
+    loadData();
+    // Load local care list ids
+    try {
+      const savedCare = localStorage.getItem('asha_care_list');
+      if (savedCare) {
+        const parsed = JSON.parse(savedCare);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setCareListPatientIds((prev) => Array.from(new Set([...prev, ...parsed])));
+        }
+      }
+    } catch {}
+  }, []);
 
-  // When patient selection changes
-  const handleSelectPatient = (pId: string) => {
-    setSelectedPatientId(pId);
-    const pat = localPatients.find((p) => p.id === pId);
-    if (pat) {
-      setIsPregnantCheck(pat.isPregnant);
-      if (pat.gestationalWeeks) setGestationalWeeks(String(pat.gestationalWeeks));
-      setIsChildCheck(pat.age <= 5);
-    }
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 4000);
   };
 
-  // Evaluate clinical risk in real-time
-  const selectedPatient = localPatients.find((p) => p.id === selectedPatientId);
-
-  const riskAssessment = evaluateClinicalRisk({
-    temperatureF: tempF ? parseFloat(tempF) : undefined,
-    systolicBP: systolicBP ? parseInt(systolicBP) : undefined,
-    diastolicBP: diastolicBP ? parseInt(diastolicBP) : undefined,
-    pulseRate: pulseRate ? parseInt(pulseRate) : undefined,
-    spo2: spo2 ? parseFloat(spo2) : undefined,
-    respiratoryRate: respRate ? parseInt(respRate) : undefined,
-    chiefComplaints: selectedComplaints,
-    isPregnant: isPregnantCheck,
-    gestationalWeeks: gestationalWeeks ? parseInt(gestationalWeeks) : undefined,
-    age: selectedPatient ? selectedPatient.age : 30,
-  });
-
-  const toggleComplaint = (complaint: string) => {
-    if (selectedComplaints.includes(complaint)) {
-      setSelectedComplaints(selectedComplaints.filter((c) => c !== complaint));
-    } else {
-      setSelectedComplaints([...selectedComplaints, complaint]);
-    }
+  // Add/Remove from My Care List
+  const toggleCareList = (patientId: string) => {
+    const updated = careListPatientIds.includes(patientId)
+      ? careListPatientIds.filter((id) => id !== patientId)
+      : [...careListPatientIds, patientId];
+    setCareListPatientIds(updated);
+    try {
+      localStorage.setItem('asha_care_list', JSON.stringify(updated));
+    } catch {}
+    showToast(
+      careListPatientIds.includes(patientId)
+        ? (isMarathi ? 'रुग्ण काळजी यादीतून काढला.' : 'Patient removed from My Care list.')
+        : (isMarathi ? '✓ रुग्ण काळजी यादीत जोडला गेला.' : '✓ Patient added to My Care list.')
+    );
   };
 
-  // Generate valid 14-digit ABHA ID format
-  const generateDemoAbha = () => {
-    const p1 = Math.floor(10 + Math.random() * 89);
-    const p2 = Math.floor(1000 + Math.random() * 9000);
-    const p3 = Math.floor(1000 + Math.random() * 9000);
-    const p4 = Math.floor(1000 + Math.random() * 9000);
-    setRegAbha(`${p1}-${p2}-${p3}-${p4}`);
-  };
-
-  // Submit Patient Registration
+  // Handle Register Patient
   const handleRegisterPatient = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!regName || !regPhone) {
-      showToast('Please enter patient name and phone number', 'alert');
+    if (!regName.trim() || !regPhone.trim()) {
+      showToast(isMarathi ? 'कृपया नाव आणि फोन नंबर टाका.' : 'Please enter patient name and phone.');
       return;
     }
 
-    const abhaToUse =
-      regAbha ||
-      `91-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}`;
+    setIsSubmittingPatient(true);
+    try {
+      const abhaId = `91-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}`;
+      const saved = await saveLocalPatient({
+        abhaId,
+        abhaAddress: `${regName.toLowerCase().replace(/[^a-z0-9]/g, '')}@abdm`,
+        name: regName.trim(),
+        gender: regGender,
+        age: parseInt(regAge) || 30,
+        phone: regPhone.trim(),
+        guardianName: regGuardian.trim() || undefined,
+        village: regVillage.trim() || 'Sakarra',
+        subCentre: 'Bilaspur SC',
+        block: 'Bilha',
+        district: 'Bilaspur',
+        bloodGroup: regBloodGroup,
+        isPregnant: regIsPregnant,
+        gestationalWeeks: regIsPregnant ? parseInt(regWeeks) || 20 : undefined,
+        edd: regIsPregnant && regEdd ? regEdd : undefined,
+      });
 
-    const saved = await saveLocalPatient({
-      abhaId: abhaToUse,
-      abhaAddress: `${regName.toLowerCase().replace(/\s+/g, '')}@abdm`,
-      name: regName,
-      gender: regGender,
-      age: parseInt(regAge) || 28,
-      phone: regPhone,
-      guardianName: regGuardian,
-      village: regVillage,
-      subCentre: 'Bilaspur Health Sub-Centre',
-      block: 'Bilha',
-      district: 'Bilaspur',
-      bloodGroup: regBloodGroup,
-      isPregnant: regIsPregnant,
-      gestationalWeeks: regWeeks ? parseInt(regWeeks) : undefined,
-      edd: regEdd,
-    });
+      confetti({ particleCount: 50, spread: 60, origin: { y: 0.6 } });
+      showToast(isMarathi ? `✓ ${saved.name} यांची नोंदणी झाली!` : `✓ Registered ${saved.name}!`);
 
-    confetti({ particleCount: 40, spread: 60, origin: { y: 0.8 } });
-    showToast(`Patient ${saved.name} registered (ABHA: ${saved.abhaId})!`);
+      // Add to Care List automatically
+      const updatedCare = Array.from(new Set([...careListPatientIds, saved.id]));
+      setCareListPatientIds(updatedCare);
+      try {
+        localStorage.setItem('asha_care_list', JSON.stringify(updatedCare));
+      } catch {}
 
-    // Reset and switch to triage
-    setRegName('');
-    setRegAbha('');
-    setRegAge('');
-    setRegPhone('');
-    setSelectedPatientId(saved.id);
-    await loadLocalData();
-    setActiveTab('triage');
+      await loadData();
+      setSelectedPatient(saved);
+      setActiveMode('record_case');
+    } catch (err: any) {
+      showToast(err.message || 'Registration failed');
+    } finally {
+      setIsSubmittingPatient(false);
+    }
   };
 
-  // Submit Clinical Triage Form
-  const handleSubmitTriage = async (options?: { requestTeleconsult?: boolean; createReferral?: boolean }) => {
-    if (!selectedPatient) {
-      showToast('Please select or register a patient first', 'alert');
+  // Dynamic risk calculation
+  const computedRisk = useMemo(() => {
+    return evaluateClinicalRisk({
+      temperatureF: parseFloat(tempF) || 98.6,
+      systolicBP: parseInt(systolicBP) || 120,
+      diastolicBP: parseInt(diastolicBP) || 80,
+      pulseRate: parseInt(pulseRate) || 72,
+      spo2: parseFloat(spo2) || 98,
+      chiefComplaints: selectedSymptoms,
+      isPregnant: selectedPatient?.isPregnant || false,
+      gestationalWeeks: selectedPatient?.gestationalWeeks,
+      age: selectedPatient?.age || 30,
+    });
+  }, [tempF, systolicBP, diastolicBP, pulseRate, spo2, selectedSymptoms, selectedPatient]);
+
+  const effectiveRiskLevel = urgencyOverride === 'RED' ? 'RED' : computedRisk.riskLevel;
+
+  // Handle Send to Doctor
+  const handleSendToDoctor = async () => {
+    if (!selectedPatient) return;
+    if (selectedSymptoms.length === 0 && !clinicalNotes.trim()) {
+      showToast(isMarathi ? 'कृपया किमान एक लक्षण किंवा निरीक्षण नोंदवा.' : 'Please select at least one symptom or note.');
       return;
     }
 
-    const newEncounter = await saveLocalEncounter({
-      patientId: selectedPatient.id,
-      patientAbhaId: selectedPatient.abhaId,
-      patientName: selectedPatient.name,
-      patientAge: selectedPatient.age,
-      patientGender: selectedPatient.gender,
-      patientVillage: selectedPatient.village,
-      healthWorkerId: 'HW-ASHA-001',
-      healthWorkerName: 'Sunita Devi (ASHA)',
-      facilityId: 'SC-BILASPUR-01',
-      facilityName: 'Bilaspur Health Sub-Centre',
-      encounterDate: new Date().toISOString(),
-      temperatureF: tempF ? parseFloat(tempF) : undefined,
-      systolicBP: systolicBP ? parseInt(systolicBP) : undefined,
-      diastolicBP: diastolicBP ? parseInt(diastolicBP) : undefined,
-      pulseRate: pulseRate ? parseInt(pulseRate) : undefined,
-      spo2: spo2 ? parseFloat(spo2) : undefined,
-      respiratoryRate: respRate ? parseInt(respRate) : undefined,
-      bloodGlucoseMgDl: bloodSugar ? parseFloat(bloodSugar) : undefined,
-      chiefComplaints: selectedComplaints,
-      durationDays: durationDays ? parseInt(durationDays) : 1,
-      clinicalNotes,
-      riskLevel: riskAssessment.riskLevel,
-      triageRationale: riskAssessment.rationale.join('; '),
-      isHighRiskMaternal: riskAssessment.isMaternalHighRisk || isPregnantCheck,
-      isHighRiskChild: riskAssessment.isChildHighRisk || isChildCheck,
-      dangerSigns: riskAssessment.dangerSigns.join(', '),
-      requestTeleconsult: Boolean(options?.requestTeleconsult || riskAssessment.riskLevel === 'RED'),
-      createReferral: Boolean(options?.createReferral || riskAssessment.riskLevel === 'RED'),
-      referralPriority: riskAssessment.riskLevel === 'RED' ? 'STAT' : 'URGENT',
-    });
+    setIsSubmittingCase(true);
+    try {
+      const newEncounter = await saveLocalEncounter({
+        patientId: selectedPatient.id,
+        patientAbhaId: selectedPatient.abhaId,
+        patientName: selectedPatient.name,
+        patientAge: selectedPatient.age,
+        patientGender: selectedPatient.gender,
+        patientVillage: selectedPatient.village,
+        healthWorkerId: 'worker-asha-001',
+        healthWorkerName: 'Sunita Devi (ASHA)',
+        facilityId: 'fac-sc-bilaspur-01',
+        facilityName: 'Bilaspur Health Sub-Centre',
+        encounterDate: new Date().toISOString(),
+        temperatureF: tempF ? parseFloat(tempF) : undefined,
+        systolicBP: systolicBP ? parseInt(systolicBP) : undefined,
+        diastolicBP: diastolicBP ? parseInt(diastolicBP) : undefined,
+        pulseRate: pulseRate ? parseInt(pulseRate) : undefined,
+        spo2: spo2 ? parseFloat(spo2) : undefined,
+        chiefComplaints: selectedSymptoms,
+        durationDays: parseInt(durationDays) || 2,
+        clinicalNotes: clinicalNotes.trim(),
+        riskLevel: effectiveRiskLevel,
+        triageRationale: computedRisk.rationale.join('; ') || 'Community triage assessment by ASHA',
+        isHighRiskMaternal: selectedPatient.isPregnant || computedRisk.isMaternalHighRisk,
+        isHighRiskChild: computedRisk.isChildHighRisk,
+        dangerSigns: computedRisk.dangerSigns.join(', ') || undefined,
+        status: 'WAITING_FOR_DOCTOR',
+      });
 
-    confetti({ particleCount: 70, spread: 70, origin: { y: 0.7 } });
-    showToast(
-      `Triage saved offline! Tagged as ${riskAssessment.riskLevel} ${
-        isOnline ? 'and auto-syncing with PHC...' : '(Queued in Dexie offline)'
-      }`
+      confetti({ particleCount: 70, spread: 70, origin: { y: 0.6 } });
+      const msg = isMarathi
+        ? `🚀 केस प्राथमिक आरोग्य केंद्र डॉक्टरांकडे पाठवली! स्थिती: 🟡 डॉक्टरांची प्रतीक्षा.`
+        : `🚀 Case sent to Doctor! Status: 🟡 Waiting for Doctor.`;
+      showToast(msg);
+      speakText(isMarathi ? 'केस डॉक्टरांकडे पाठवली गेली आहे.' : 'Case sent to Doctor.', isMarathi ? 'mr-IN' : 'en-IN');
+
+      // Add to Care List
+      const updatedCare = Array.from(new Set([...careListPatientIds, selectedPatient.id]));
+      setCareListPatientIds(updatedCare);
+      try {
+        localStorage.setItem('asha_care_list', JSON.stringify(updatedCare));
+      } catch {}
+
+      // Reset
+      setSelectedSymptoms([]);
+      setClinicalNotes('');
+      await loadData();
+      setActiveMode('my_care');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to submit case to doctor');
+    } finally {
+      setIsSubmittingCase(false);
+    }
+  };
+
+  // Search filtered patients
+  const searchResults = useMemo(() => {
+    if (!searchQuery.trim()) return [];
+    const q = searchQuery.toLowerCase().trim();
+    return patients.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.phone.includes(q) ||
+        p.village.toLowerCase().includes(q) ||
+        p.abhaId.includes(q)
     );
+  }, [patients, searchQuery]);
 
-    // Reset complaints
-    setSelectedComplaints([]);
-    setClinicalNotes('');
-    await loadLocalData();
+  // Filtered Care Cases
+  const careCases = useMemo(() => {
+    // Collect all encounters for patients in careListPatientIds or all recent encounters
+    let cases = encounters.map((enc) => {
+      const pat = patients.find((p) => p.id === enc.patientId) || enc.patient || { name: 'Patient', age: 30, village: 'Sakarra' };
+      return {
+        ...enc,
+        patientData: pat,
+      };
+    });
+
+    if (statusFilter !== 'ALL') {
+      cases = cases.filter((c) => (c.status || 'WAITING_FOR_DOCTOR') === statusFilter);
+    }
+
+    return cases;
+  }, [encounters, patients, statusFilter]);
+
+  // Status Badge Component
+  const renderStatusBadge = (status: string) => {
+    switch (status) {
+      case 'WAITING_FOR_DOCTOR':
+      case 'UNDER_REVIEW':
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: '#fef9c3', color: '#854d0e', padding: '4px 10px', borderRadius: '12px', fontSize: '0.82rem', fontWeight: 800 }}>
+            🟡 {isMarathi ? 'डॉक्टरांची प्रतीक्षा' : 'Waiting for Doctor'}
+          </span>
+        );
+      case 'DOCTOR_REVIEWING':
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: '#dbeafe', color: '#1e40af', padding: '4px 10px', borderRadius: '12px', fontSize: '0.82rem', fontWeight: 800 }}>
+            🔵 {isMarathi ? 'डॉक्टर तपासत आहेत' : 'Doctor Reviewing'}
+          </span>
+        );
+      case 'DOCTOR_RESPONDED':
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: '#dcfce7', color: '#166534', padding: '4px 10px', borderRadius: '12px', fontSize: '0.82rem', fontWeight: 800 }}>
+            🟢 {isMarathi ? 'डॉक्टरांचा सल्ला आला' : 'Doctor Responded'}
+          </span>
+        );
+      case 'FOLLOWUP_REQUIRED':
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: '#ffedd5', color: '#9a3412', padding: '4px 10px', borderRadius: '12px', fontSize: '0.82rem', fontWeight: 800 }}>
+            🟠 {isMarathi ? 'पुन्हा तपासणी आवश्यक' : 'Follow-up Required'}
+          </span>
+        );
+      case 'COMPLETED':
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: '#f1f5f9', color: '#475569', padding: '4px 10px', borderRadius: '12px', fontSize: '0.82rem', fontWeight: 800 }}>
+            ✅ {isMarathi ? 'पूर्ण झाले' : 'Completed'}
+          </span>
+        );
+      default:
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: '#fef9c3', color: '#854d0e', padding: '4px 10px', borderRadius: '12px', fontSize: '0.82rem', fontWeight: 800 }}>
+            🟡 {isMarathi ? 'डॉक्टरांची प्रतीक्षा' : 'Waiting for Doctor'}
+          </span>
+        );
+    }
   };
 
-  const content = (
-    <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-      {/* Top Frontline Worker Header */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          background: '#ffffff',
-          padding: '12px 14px',
-          borderRadius: 'var(--radius-md)',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <div
-            style={{
-              width: '40px',
-              height: '40px',
-              borderRadius: '50%',
-              background: 'linear-gradient(135deg, #0d9488, #0f766e)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#fff',
-              fontWeight: 700,
-              fontSize: '1rem',
-            }}
-          >
-            SD
-          </div>
-          <div>
-            <div style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--slate-900)' }}>Sunita Devi</div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--slate-500)' }}>
-              ASHA Worker • Bilaspur Sub-Centre
-            </div>
-          </div>
-        </div>
-
-        <button
-          onClick={() => setIsPhoneFrame(!isPhoneFrame)}
-          title="Toggle phone frame preview"
+  return (
+    <div style={{ maxWidth: '960px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+      {/* Toast Notification Banner */}
+      {toastMessage && (
+        <div
+          role="status"
           style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '4px',
-            padding: '6px 10px',
-            background: 'var(--slate-100)',
-            borderRadius: 'var(--radius-sm)',
-            fontSize: '0.75rem',
-            fontWeight: 600,
-            color: 'var(--slate-700)',
+            position: 'fixed',
+            top: '76px',
+            right: '20px',
+            zIndex: 9999,
+            background: '#0f172a',
+            color: '#ffffff',
+            padding: '12px 20px',
+            borderRadius: '14px',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.2)',
+            fontSize: '0.92rem',
+            fontWeight: 700,
+            animation: 'slideIn 0.2s ease',
           }}
         >
-          {isPhoneFrame ? <Maximize2 size={14} /> : <Smartphone size={14} />}
-          {isPhoneFrame ? 'Expand' : 'Phone View'}
-        </button>
-      </div>
+          {toastMessage}
+        </div>
+      )}
 
-      {/* Online / Offline Sync Status Bar */}
+      {/* ASHA Header & Overview Card */}
       <div
-        className={`sync-statusbar ${isOnline ? (isSyncing ? 'syncing' : 'online') : 'offline'}`}
-        style={{ borderRadius: 'var(--radius-md)' }}
+        style={{
+          background: 'linear-gradient(135deg, #0d9488 0%, #0f766e 100%)',
+          borderRadius: '24px',
+          padding: '24px 28px',
+          color: '#ffffff',
+          boxShadow: '0 8px 24px rgba(13, 148, 136, 0.22)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '16px',
+        }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          {isOnline ? (
-            isSyncing ? (
-              <RefreshCw size={16} className="animate-spin" style={{ animation: 'spin 1s linear infinite' }} />
-            ) : (
-              <Wifi size={16} />
-            )
-          ) : (
-            <WifiOff size={16} />
-          )}
-          <span>
-            {isOnline
-              ? isSyncing
-                ? 'Syncing with PHC server...'
-                : 'Online Mode (Auto-Sync Active)'
-              : 'Offline Mode (Dexie IDB Active)'}
-          </span>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+            <span style={{ background: 'rgba(255,255,255,0.2)', padding: '4px 10px', borderRadius: '8px', fontSize: '0.78rem', fontWeight: 800 }}>
+              {isMarathi ? 'आशा समुदाय आरोग्य सेविका' : 'ASHA Community Health Worker'}
+            </span>
+            <span style={{ fontSize: '0.8rem', opacity: 0.9 }}>📍 {isMarathi ? 'बिलासपूर उपकेंद्र' : 'Bilaspur Sub-Centre'}</span>
+          </div>
+          <h1 style={{ margin: 0, fontSize: '1.75rem', fontWeight: 900, letterSpacing: '-0.5px' }}>
+            {isMarathi ? 'सुनिता देवी • समुदाय रुग्णसेवा' : 'Sunita Devi • Frontline Community Care'}
+          </h1>
+          <p style={{ margin: '6px 0 0 0', fontSize: '0.9rem', opacity: 0.9 }}>
+            {isMarathi
+              ? 'गावातील रुग्णांची नोंदणी करा, लक्षणे तपासा आणि थेट पीएचसी डॉक्टरांकडे पाठवा.'
+              : 'Register village patients, record symptoms, and send cases directly to PHC doctors.'}
+          </p>
         </div>
 
+        {/* Offline Vault & Sync Indicator */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          {pendingCount > 0 && (
-            <span
-              style={{
-                background: '#f59e0b',
-                color: '#fff',
-                padding: '2px 8px',
-                borderRadius: '999px',
-                fontSize: '0.72rem',
-                fontWeight: 700,
-              }}
-            >
-              {pendingCount} pending
-            </span>
-          )}
-
           <button
             onClick={() => syncNow()}
-            disabled={isSyncing || !isOnline}
+            disabled={isSyncing}
             style={{
-              padding: '3px 8px',
-              borderRadius: 'var(--radius-sm)',
-              background: '#0d9488',
-              color: '#fff',
-              fontSize: '0.75rem',
-              fontWeight: 600,
+              background: 'rgba(255,255,255,0.18)',
+              border: '1px solid rgba(255,255,255,0.3)',
+              color: '#ffffff',
+              padding: '8px 14px',
+              borderRadius: '12px',
+              fontSize: '0.84rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
             }}
           >
-            Sync Now
+            <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
+            <span>{isSyncing ? (isMarathi ? 'सिंक होत आहे...' : 'Syncing...') : (isMarathi ? 'सिंक करा' : 'Sync Now')}</span>
+            {pendingCount > 0 && (
+              <span style={{ background: '#f59e0b', color: '#ffffff', padding: '1px 6px', borderRadius: '10px', fontSize: '0.72rem' }}>
+                {pendingCount}
+              </span>
+            )}
           </button>
         </div>
       </div>
 
-      {/* Quick Tabs: Triage | New Patient | Offline Vault */}
+      {/* Primary Workflow Actions (Find, Register, My Care) */}
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: '1fr 1fr 1fr',
-          gap: '6px',
-          background: 'var(--slate-100)',
-          padding: '4px',
-          borderRadius: 'var(--radius-md)',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+          gap: '12px',
         }}
       >
         <button
-          onClick={() => setActiveTab('triage')}
+          type="button"
+          onClick={() => setActiveMode('my_care')}
           style={{
-            padding: '8px',
-            borderRadius: 'var(--radius-sm)',
-            fontWeight: 700,
-            fontSize: '0.8rem',
-            background: activeTab === 'triage' ? '#ffffff' : 'transparent',
-            color: activeTab === 'triage' ? 'var(--primary)' : 'var(--slate-600)',
-            boxShadow: activeTab === 'triage' ? '0 1px 4px rgba(0,0,0,0.08)' : 'none',
+            padding: '16px 20px',
+            borderRadius: '18px',
+            border: activeMode === 'my_care' ? '2.5px solid #0d9488' : '1.5px solid #e2e8f0',
+            background: activeMode === 'my_care' ? '#f0fdfa' : '#ffffff',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'center',
-            gap: '6px',
+            gap: '14px',
+            cursor: 'pointer',
+            boxShadow: activeMode === 'my_care' ? '0 4px 14px rgba(13,148,136,0.15)' : 'none',
+            transition: 'all 0.15s ease',
           }}
         >
-          <Activity size={15} /> Triage
+          <div style={{ width: '42px', height: '42px', borderRadius: '12px', background: '#ccfbf1', color: '#0f766e', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Heart size={22} />
+          </div>
+          <div style={{ textAlign: 'left' }}>
+            <div style={{ fontWeight: 800, fontSize: '1.05rem', color: '#0f172a' }}>
+              {isMarathi ? 'माझी काळजी यादी' : 'My Care List'}
+            </div>
+            <div style={{ fontSize: '0.8rem', color: '#64748b' }}>
+              {careCases.length} {isMarathi ? 'सक्रिय केसेस' : 'active cases tracking'}
+            </div>
+          </div>
         </button>
+
         <button
-          onClick={() => setActiveTab('register')}
+          type="button"
+          onClick={() => {
+            setActiveMode('find_patient');
+            setSearchQuery('');
+          }}
           style={{
-            padding: '8px',
-            borderRadius: 'var(--radius-sm)',
-            fontWeight: 700,
-            fontSize: '0.8rem',
-            background: activeTab === 'register' ? '#ffffff' : 'transparent',
-            color: activeTab === 'register' ? 'var(--primary)' : 'var(--slate-600)',
-            boxShadow: activeTab === 'register' ? '0 1px 4px rgba(0,0,0,0.08)' : 'none',
+            padding: '16px 20px',
+            borderRadius: '18px',
+            border: activeMode === 'find_patient' ? '2.5px solid #0d9488' : '1.5px solid #e2e8f0',
+            background: activeMode === 'find_patient' ? '#f0fdfa' : '#ffffff',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'center',
-            gap: '6px',
+            gap: '14px',
+            cursor: 'pointer',
+            boxShadow: activeMode === 'find_patient' ? '0 4px 14px rgba(13,148,136,0.15)' : 'none',
+            transition: 'all 0.15s ease',
           }}
         >
-          <UserPlus size={15} /> Register
+          <div style={{ width: '42px', height: '42px', borderRadius: '12px', background: '#e0e7ff', color: '#3730a3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Search size={22} />
+          </div>
+          <div style={{ textAlign: 'left' }}>
+            <div style={{ fontWeight: 800, fontSize: '1.05rem', color: '#0f172a' }}>
+              {isMarathi ? 'रुग्ण शोधा' : 'Find Patient'}
+            </div>
+            <div style={{ fontSize: '0.8rem', color: '#64748b' }}>
+              {isMarathi ? 'मोबाईल किंवा नावाने शोधा' : 'Search by phone, name, or ID'}
+            </div>
+          </div>
         </button>
+
         <button
-          onClick={() => setActiveTab('offline_vault')}
+          type="button"
+          onClick={() => {
+            setActiveMode('register_patient');
+            setSelectedPatient(null);
+          }}
           style={{
-            padding: '8px',
-            borderRadius: 'var(--radius-sm)',
-            fontWeight: 700,
-            fontSize: '0.8rem',
-            background: activeTab === 'offline_vault' ? '#ffffff' : 'transparent',
-            color: activeTab === 'offline_vault' ? 'var(--primary)' : 'var(--slate-600)',
-            boxShadow: activeTab === 'offline_vault' ? '0 1px 4px rgba(0,0,0,0.08)' : 'none',
+            padding: '16px 20px',
+            borderRadius: '18px',
+            border: activeMode === 'register_patient' ? '2.5px solid #0d9488' : '1.5px solid #e2e8f0',
+            background: activeMode === 'register_patient' ? '#f0fdfa' : '#ffffff',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'center',
-            gap: '6px',
+            gap: '14px',
+            cursor: 'pointer',
+            boxShadow: activeMode === 'register_patient' ? '0 4px 14px rgba(13,148,136,0.15)' : 'none',
+            transition: 'all 0.15s ease',
           }}
         >
-          <Database size={15} /> Vault ({vaultEncounters.length})
+          <div style={{ width: '42px', height: '42px', borderRadius: '12px', background: '#fef3c7', color: '#92400e', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <UserPlus size={22} />
+          </div>
+          <div style={{ textAlign: 'left' }}>
+            <div style={{ fontWeight: 800, fontSize: '1.05rem', color: '#0f172a' }}>
+              {isMarathi ? 'नवीन रुग्ण नोंदणी' : 'Register New Patient'}
+            </div>
+            <div style={{ fontSize: '0.8rem', color: '#64748b' }}>
+              {isMarathi ? 'गावातील नवीन व्यक्ती जोडा' : 'Add new village citizen'}
+            </div>
+          </div>
         </button>
       </div>
 
-      {/* Toast Notification Alert */}
-      {toastMsg && (
+      {/* Selected Patient Banner if in record_case mode */}
+      {selectedPatient && activeMode === 'record_case' && (
         <div
           style={{
-            padding: '10px 14px',
-            borderRadius: 'var(--radius-md)',
-            background: toastMsg.type === 'alert' ? '#fef2f2' : '#ecfdf5',
-            color: toastMsg.type === 'alert' ? '#991b1b' : '#065f46',
-            border: `1px solid ${toastMsg.type === 'alert' ? '#fecdd3' : '#a7f3d0'}`,
-            fontSize: '0.85rem',
-            fontWeight: 600,
+            background: '#ffffff',
+            borderRadius: '18px',
+            padding: '16px 20px',
+            border: '2px solid #0d9488',
             display: 'flex',
+            justifyContent: 'space-between',
             alignItems: 'center',
-            gap: '8px',
+            flexWrap: 'wrap',
+            gap: '12px',
           }}
         >
-          {toastMsg.type === 'alert' ? <AlertTriangle size={16} /> : <CheckCircle size={16} />}
-          {toastMsg.text}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ width: '44px', height: '44px', borderRadius: '50%', background: '#ccfbf1', color: '#0f766e', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900, fontSize: '1.2rem' }}>
+              {selectedPatient.name.charAt(0)}
+            </div>
+            <div>
+              <div style={{ fontWeight: 800, fontSize: '1.15rem', color: '#0f172a' }}>
+                {selectedPatient.name} ({selectedPatient.age} {isMarathi ? 'वर्षे' : 'yrs'}, {selectedPatient.gender})
+              </div>
+              <div style={{ fontSize: '0.85rem', color: '#64748b' }}>
+                📞 {selectedPatient.phone} • 📍 {selectedPatient.village} {selectedPatient.isPregnant && `• 🤰 ${selectedPatient.gestationalWeeks || 20}w`}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              type="button"
+              onClick={() => toggleCareList(selectedPatient.id)}
+              style={{
+                padding: '8px 14px',
+                borderRadius: '10px',
+                border: '1.5px solid #cbd5e1',
+                background: careListPatientIds.includes(selectedPatient.id) ? '#f0fdf4' : '#ffffff',
+                color: careListPatientIds.includes(selectedPatient.id) ? '#166534' : '#334155',
+                fontSize: '0.85rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              {careListPatientIds.includes(selectedPatient.id)
+                ? (isMarathi ? '✓ काळजी यादीत आहे' : '✓ In My Care List')
+                : (isMarathi ? '📌 काळजी यादीत जोडा' : '📌 Add to Care List')}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedPatient(null);
+                setActiveMode('my_care');
+              }}
+              style={{
+                padding: '8px 12px',
+                borderRadius: '10px',
+                border: 'none',
+                background: '#f1f5f9',
+                color: '#64748b',
+                cursor: 'pointer',
+              }}
+            >
+              <X size={16} />
+            </button>
+          </div>
         </div>
       )}
 
-      {/* ------------------------------------------------------------- */}
-      {/* TAB 1: CLINICAL TRIAGE SCREEN                                 */}
-      {/* ------------------------------------------------------------- */}
-      {activeTab === 'triage' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-          {/* Patient Selection Dropdown */}
-          <div className="glass-panel" style={{ padding: '14px' }}>
-            <label className="form-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span>Select Patient for Triage</span>
-              <span style={{ color: 'var(--primary)', cursor: 'pointer' }} onClick={() => setActiveTab('register')}>
-                + New Patient
-              </span>
-            </label>
-            <select
-              value={selectedPatientId}
-              onChange={(e) => handleSelectPatient(e.target.value)}
-              className="form-input"
-              style={{ fontWeight: 600 }}
-            >
-              {localPatients.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} ({p.age}y, {p.gender}) • ABHA: {p.abhaId} • {p.village}
-                </option>
-              ))}
-            </select>
+      {/* -------------------------------------------------------------------- */}
+      {/* MODE 1: FIND PATIENT */}
+      {/* -------------------------------------------------------------------- */}
+      {activeMode === 'find_patient' && (
+        <div style={{ background: '#ffffff', borderRadius: '24px', padding: '24px', border: '1.5px solid #e2e8f0', boxShadow: '0 4px 16px rgba(0,0,0,0.04)' }}>
+          <h2 style={{ margin: '0 0 16px 0', fontSize: '1.35rem', fontWeight: 900, color: '#0f172a' }}>
+            {isMarathi ? '🔍 गावातील रुग्ण शोधा' : '🔍 Find Village Patient'}
+          </h2>
 
-            {selectedPatient && (
-              <div
+          <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
+            <div style={{ flex: 1, position: 'relative' }}>
+              <Search size={18} style={{ position: 'absolute', left: '16px', top: '16px', color: '#94a3b8' }} />
+              <input
+                type="text"
+                placeholder={isMarathi ? 'मोबाईल नंबर किंवा नाव टाका (उदा. 9876543210 / प्रिया)...' : 'Enter mobile number, name, or ABHA ID...'}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
                 style={{
-                  marginTop: '10px',
-                  display: 'flex',
-                  gap: '8px',
-                  flexWrap: 'wrap',
-                  fontSize: '0.78rem',
-                  color: 'var(--slate-600)',
+                  width: '100%',
+                  padding: '14px 16px 14px 44px',
+                  borderRadius: '14px',
+                  border: '2px solid #0d9488',
+                  fontSize: '1rem',
+                  fontWeight: 600,
+                  outline: 'none',
+                  boxSizing: 'border-box',
                 }}
-              >
-                <span
-                  style={{
-                    background: 'var(--slate-100)',
-                    padding: '2px 8px',
-                    borderRadius: '4px',
-                    fontWeight: 600,
-                  }}
-                >
-                  📍 {selectedPatient.village}
-                </span>
-                <span
-                  style={{
-                    background: 'var(--slate-100)',
-                    padding: '2px 8px',
-                    borderRadius: '4px',
-                    fontWeight: 600,
-                  }}
-                >
-                  📞 {selectedPatient.phone}
-                </span>
-                {selectedPatient.isPregnant && (
-                  <span
+                autoFocus
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setActiveMode('register_patient');
+                setRegPhone(searchQuery.replace(/\D/g, '').slice(-10));
+              }}
+              style={{
+                padding: '14px 20px',
+                borderRadius: '14px',
+                border: 'none',
+                background: '#0d9488',
+                color: '#ffffff',
+                fontWeight: 800,
+                fontSize: '0.95rem',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              + {isMarathi ? 'नवीन नोंदणी' : 'Register New'}
+            </button>
+          </div>
+
+          {/* Search Results */}
+          {searchQuery.trim() && (
+            <div>
+              <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#64748b', marginBottom: '10px' }}>
+                {searchResults.length} {isMarathi ? 'रुग्ण सापडले' : 'patients found'}
+              </div>
+
+              {searchResults.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '30px', background: '#f8fafc', borderRadius: '16px' }}>
+                  <p style={{ margin: '0 0 12px 0', color: '#64748b', fontWeight: 600 }}>
+                    {isMarathi ? 'या माहितीचा रुग्ण सापडला नाही.' : 'No registered patient found with these details.'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveMode('register_patient');
+                      setRegPhone(searchQuery.replace(/\D/g, '').slice(-10));
+                      setRegName(searchQuery.replace(/[0-9]/g, '').trim());
+                    }}
                     style={{
-                      background: '#fdf2f8',
-                      color: '#db2777',
-                      padding: '2px 8px',
-                      borderRadius: '4px',
-                      fontWeight: 700,
+                      padding: '10px 18px',
+                      borderRadius: '12px',
+                      border: 'none',
+                      background: '#0d9488',
+                      color: '#ffffff',
+                      fontWeight: 800,
+                      cursor: 'pointer',
                     }}
                   >
-                    🤰 ANC ({selectedPatient.gestationalWeeks || 24}w)
-                  </span>
-                )}
+                    + {isMarathi ? `या नंबरवर नवीन रुग्ण नोंदवा` : `Register new patient now`}
+                  </button>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  {searchResults.map((p) => (
+                    <div
+                      key={p.id}
+                      style={{
+                        padding: '14px 18px',
+                        borderRadius: '14px',
+                        border: '1.5px solid #e2e8f0',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        background: '#ffffff',
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '1.05rem' }}>{p.name}</div>
+                        <div style={{ fontSize: '0.84rem', color: '#64748b' }}>
+                          {p.age} {isMarathi ? 'वर्षे' : 'yrs'} • {p.gender} • 📞 {p.phone} • 📍 {p.village}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedPatient(p);
+                            setActiveMode('record_case');
+                          }}
+                          style={{
+                            padding: '8px 16px',
+                            borderRadius: '10px',
+                            border: 'none',
+                            background: '#0d9488',
+                            color: '#ffffff',
+                            fontWeight: 800,
+                            fontSize: '0.85rem',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {isMarathi ? 'तपासा / डॉक्टरांकडे पाठवा ➔' : 'Triage / Send to Doctor ➔'}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* -------------------------------------------------------------------- */}
+      {/* MODE 2: REGISTER NEW PATIENT */}
+      {/* -------------------------------------------------------------------- */}
+      {activeMode === 'register_patient' && (
+        <form onSubmit={handleRegisterPatient} style={{ background: '#ffffff', borderRadius: '24px', padding: '24px', border: '1.5px solid #e2e8f0', boxShadow: '0 4px 16px rgba(0,0,0,0.04)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
+            <h2 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 900, color: '#0f172a' }}>
+              {isMarathi ? '➕ नवीन रुग्ण नोंदणी' : '➕ Register New Patient'}
+            </h2>
+            <button type="button" onClick={() => setActiveMode('my_care')} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer' }}>
+              <X size={20} />
+            </button>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '20px' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 800, color: '#334155', marginBottom: '6px' }}>
+                {isMarathi ? 'पूर्ण नाव *' : 'Full Name *'}
+              </label>
+              <input
+                type="text"
+                required
+                placeholder={isMarathi ? 'रुग्णाचे नाव' : 'Patient Name'}
+                value={regName}
+                onChange={(e) => setRegName(e.target.value)}
+                style={{ width: '100%', padding: '12px 14px', borderRadius: '12px', border: '1.5px solid #cbd5e1', fontSize: '0.95rem', fontWeight: 600, outline: 'none', boxSizing: 'border-box' }}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 800, color: '#334155', marginBottom: '6px' }}>
+                {isMarathi ? 'मोबाईल नंबर *' : 'Mobile Phone *'}
+              </label>
+              <input
+                type="tel"
+                required
+                placeholder="9876543210"
+                value={regPhone}
+                onChange={(e) => setRegPhone(e.target.value)}
+                style={{ width: '100%', padding: '12px 14px', borderRadius: '12px', border: '1.5px solid #cbd5e1', fontSize: '0.95rem', fontWeight: 600, outline: 'none', boxSizing: 'border-box' }}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 800, color: '#334155', marginBottom: '6px' }}>
+                {isMarathi ? 'वय *' : 'Age *'}
+              </label>
+              <input
+                type="number"
+                required
+                placeholder="30"
+                value={regAge}
+                onChange={(e) => setRegAge(e.target.value)}
+                style={{ width: '100%', padding: '12px 14px', borderRadius: '12px', border: '1.5px solid #cbd5e1', fontSize: '0.95rem', fontWeight: 600, outline: 'none', boxSizing: 'border-box' }}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 800, color: '#334155', marginBottom: '6px' }}>
+                {isMarathi ? 'लिंग *' : 'Gender *'}
+              </label>
+              <select
+                value={regGender}
+                onChange={(e: any) => setRegGender(e.target.value)}
+                style={{ width: '100%', padding: '12px 14px', borderRadius: '12px', border: '1.5px solid #cbd5e1', fontSize: '0.95rem', fontWeight: 600, outline: 'none', boxSizing: 'border-box' }}
+              >
+                <option value="female">{isMarathi ? 'स्त्री (Female)' : 'Female'}</option>
+                <option value="male">{isMarathi ? 'पुरुष (Male)' : 'Male'}</option>
+                <option value="other">{isMarathi ? 'इतर (Other)' : 'Other'}</option>
+              </select>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 800, color: '#334155', marginBottom: '6px' }}>
+                {isMarathi ? 'गाव / वस्ती *' : 'Village *'}
+              </label>
+              <input
+                type="text"
+                required
+                placeholder={isMarathi ? 'गावाचे नाव' : 'Village Name'}
+                value={regVillage}
+                onChange={(e) => setRegVillage(e.target.value)}
+                style={{ width: '100%', padding: '12px 14px', borderRadius: '12px', border: '1.5px solid #cbd5e1', fontSize: '0.95rem', fontWeight: 600, outline: 'none', boxSizing: 'border-box' }}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 800, color: '#334155', marginBottom: '6px' }}>
+                {isMarathi ? 'पालक / पतीचे नाव' : 'Guardian / Spouse Name'}
+              </label>
+              <input
+                type="text"
+                placeholder={isMarathi ? 'पालकांचे नाव' : 'Guardian Name'}
+                value={regGuardian}
+                onChange={(e) => setRegGuardian(e.target.value)}
+                style={{ width: '100%', padding: '12px 14px', borderRadius: '12px', border: '1.5px solid #cbd5e1', fontSize: '0.95rem', fontWeight: 600, outline: 'none', boxSizing: 'border-box' }}
+              />
+            </div>
+          </div>
+
+          {/* Maternal Checkbox */}
+          <div style={{ background: '#f8fafc', padding: '14px 18px', borderRadius: '14px', marginBottom: '20px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', fontWeight: 700, color: '#0f172a' }}>
+              <input
+                type="checkbox"
+                checked={regIsPregnant}
+                onChange={(e) => setRegIsPregnant(e.target.checked)}
+                style={{ width: '18px', height: '18px' }}
+              />
+              <span>🤰 {isMarathi ? 'रुग्ण गरोदर माता आहे का? (Maternal ANC)' : 'Is patient pregnant? (Maternal Care)'}</span>
+            </label>
+
+            {regIsPregnant && (
+              <div style={{ display: 'flex', gap: '16px', marginTop: '12px' }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ fontSize: '0.8rem', color: '#64748b' }}>{isMarathi ? 'गरोदर आठवडे (Weeks)' : 'Gestational Weeks'}</label>
+                  <input
+                    type="number"
+                    value={regWeeks}
+                    onChange={(e) => setRegWeeks(e.target.value)}
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={{ fontSize: '0.8rem', color: '#64748b' }}>{isMarathi ? 'प्रसूतीची अंदाजे तारीख (EDD)' : 'Expected Date of Delivery'}</label>
+                  <input
+                    type="date"
+                    value={regEdd}
+                    onChange={(e) => setRegEdd(e.target.value)}
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
+                  />
+                </div>
               </div>
             )}
           </div>
 
-          {/* Point-of-Care Vitals Grid */}
-          <div className="glass-panel" style={{ padding: '14px' }}>
-            <div
-              style={{
-                fontSize: '0.9rem',
-                fontWeight: 700,
-                color: 'var(--slate-900)',
-                marginBottom: '12px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-              }}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+            <button
+              type="button"
+              onClick={() => setActiveMode('my_care')}
+              style={{ padding: '12px 18px', borderRadius: '12px', border: '1.5px solid #cbd5e1', background: '#ffffff', color: '#475569', fontWeight: 700, cursor: 'pointer' }}
             >
-              <Heart size={18} color="var(--primary)" /> Vital Signs Measurement
-            </div>
+              {isMarathi ? 'रद्द करा' : 'Cancel'}
+            </button>
+            <button
+              type="submit"
+              disabled={isSubmittingPatient}
+              style={{ padding: '12px 24px', borderRadius: '12px', border: 'none', background: '#0d9488', color: '#ffffff', fontWeight: 800, fontSize: '1rem', cursor: 'pointer' }}
+            >
+              {isSubmittingPatient ? (isMarathi ? 'जतन करत आहे...' : 'Saving...') : (isMarathi ? 'जतन करा आणि पुढे जा ➔' : 'Save & Continue ➔')}
+            </button>
+          </div>
+        </form>
+      )}
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-              {/* Temperature */}
+      {/* -------------------------------------------------------------------- */}
+      {/* MODE 3: RECORD CASE & SEND TO DOCTOR */}
+      {/* -------------------------------------------------------------------- */}
+      {selectedPatient && activeMode === 'record_case' && (
+        <div style={{ background: '#ffffff', borderRadius: '24px', padding: '24px', border: '1.5px solid #e2e8f0', boxShadow: '0 4px 16px rgba(0,0,0,0.04)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <div>
+              <span style={{ background: '#fef3c7', color: '#92400e', padding: '4px 10px', borderRadius: '8px', fontSize: '0.78rem', fontWeight: 800 }}>
+                {isMarathi ? 'पायरी २ • लक्षणे नोंदवा व डॉक्टरांकडे पाठवा' : 'Step 2 • Record Symptoms & Send to Doctor'}
+              </span>
+              <h2 style={{ margin: '6px 0 0 0', fontSize: '1.4rem', fontWeight: 900, color: '#0f172a' }}>
+                {selectedPatient.name} {isMarathi ? 'यांचे आरोग्य मूल्यमापन' : '- Clinical Assessment'}
+              </h2>
+            </div>
+            <SpeakButton text={`${selectedPatient.name}. Please select symptoms and vitals.`} />
+          </div>
+
+          {/* Quick Symptoms Multi-select */}
+          <div style={{ marginBottom: '20px' }}>
+            <label style={{ display: 'block', fontSize: '0.9rem', fontWeight: 800, color: '#0f172a', marginBottom: '8px' }}>
+              {isMarathi ? '१. प्रमुख लक्षणे निवडा (Chief Symptoms) *' : '1. Select Chief Symptoms *'}
+            </label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+              {COMMON_COMPLAINTS.map((comp) => {
+                const isSelected = selectedSymptoms.includes(comp);
+                return (
+                  <button
+                    key={comp}
+                    type="button"
+                    onClick={() => {
+                      setSelectedSymptoms((prev) =>
+                        isSelected ? prev.filter((c) => c !== comp) : [...prev, comp]
+                      );
+                    }}
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: '12px',
+                      border: isSelected ? '2px solid #0d9488' : '1.5px solid #cbd5e1',
+                      background: isSelected ? '#ccfbf1' : '#ffffff',
+                      color: isSelected ? '#0f766e' : '#334155',
+                      fontSize: '0.85rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      transition: 'all 0.1s ease',
+                    }}
+                  >
+                    {isSelected && '✓ '}
+                    {getSymptomLabel(comp)}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Vitals Form */}
+          <div style={{ background: '#f8fafc', padding: '18px', borderRadius: '18px', marginBottom: '20px' }}>
+            <label style={{ display: 'block', fontSize: '0.9rem', fontWeight: 800, color: '#0f172a', marginBottom: '12px' }}>
+              {isMarathi ? '२. उपलब्ध शारीरिक नोंदी (Available Vitals)' : '2. Available Patient Vitals'}
+            </label>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '12px' }}>
               <div>
-                <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <Thermometer size={14} color="#f59e0b" /> Temp (°F)
-                </label>
+                <label style={{ fontSize: '0.78rem', color: '#64748b', fontWeight: 700 }}>🌡️ {isMarathi ? 'ताप (°F)' : 'Temp (°F)'}</label>
                 <input
                   type="number"
                   step="0.1"
                   value={tempF}
                   onChange={(e) => setTempF(e.target.value)}
-                  className="form-input"
-                  style={{
-                    borderColor: parseFloat(tempF) >= 100.4 ? 'var(--risk-red)' : 'var(--slate-200)',
-                    fontWeight: 700,
-                  }}
+                  style={{ width: '100%', padding: '8px 12px', borderRadius: '10px', border: '1px solid #cbd5e1', fontWeight: 700 }}
                 />
-                <span style={{ fontSize: '0.7rem', color: 'var(--slate-500)' }}>
-                  {parseFloat(tempF) >= 100.4 ? '⚠️ Fever' : 'Normal: 97-99°F'}
-                </span>
               </div>
-
-              {/* Pulse Rate with heart animation */}
               <div>
-                <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <span className="animate-pulse-heart">❤️</span> Pulse (bpm)
-                </label>
-                <input
-                  type="number"
-                  value={pulseRate}
-                  onChange={(e) => setPulseRate(e.target.value)}
-                  className="form-input"
-                  style={{
-                    borderColor:
-                      parseInt(pulseRate) > 105 || parseInt(pulseRate) < 50
-                        ? 'var(--risk-red)'
-                        : 'var(--slate-200)',
-                    fontWeight: 700,
-                  }}
-                />
-                <span style={{ fontSize: '0.7rem', color: 'var(--slate-500)' }}>
-                  {parseInt(pulseRate) > 105 ? '⚠️ Tachycardia' : 'Normal: 60-100'}
-                </span>
-              </div>
-
-              {/* Systolic BP */}
-              <div>
-                <label className="form-label">BP Systolic (mmHg)</label>
+                <label style={{ fontSize: '0.78rem', color: '#64748b', fontWeight: 700 }}>💓 {isMarathi ? 'सिस्टोलिक बीपी' : 'Systolic BP'}</label>
                 <input
                   type="number"
                   value={systolicBP}
                   onChange={(e) => setSystolicBP(e.target.value)}
-                  className="form-input"
-                  style={{
-                    borderColor: parseInt(systolicBP) >= 140 ? 'var(--risk-red)' : 'var(--slate-200)',
-                    fontWeight: 700,
-                  }}
+                  style={{ width: '100%', padding: '8px 12px', borderRadius: '10px', border: '1px solid #cbd5e1', fontWeight: 700 }}
                 />
-                <span style={{ fontSize: '0.7rem', color: 'var(--slate-500)' }}>
-                  {parseInt(systolicBP) >= 160 ? '🚨 Hypertensive Crisis' : 'Target: <120'}
-                </span>
               </div>
-
-              {/* Diastolic BP */}
               <div>
-                <label className="form-label">BP Diastolic (mmHg)</label>
+                <label style={{ fontSize: '0.78rem', color: '#64748b', fontWeight: 700 }}>💓 {isMarathi ? 'डायस्टोलिक बीपी' : 'Diastolic BP'}</label>
                 <input
                   type="number"
                   value={diastolicBP}
                   onChange={(e) => setDiastolicBP(e.target.value)}
-                  className="form-input"
-                  style={{
-                    borderColor: parseInt(diastolicBP) >= 90 ? 'var(--risk-red)' : 'var(--slate-200)',
-                    fontWeight: 700,
-                  }}
+                  style={{ width: '100%', padding: '8px 12px', borderRadius: '10px', border: '1px solid #cbd5e1', fontWeight: 700 }}
                 />
-                <span style={{ fontSize: '0.7rem', color: 'var(--slate-500)' }}>Target: &lt;80 mmHg</span>
               </div>
-
-              {/* SpO2 */}
               <div>
-                <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <Droplets size={14} color="#0284c7" /> SpO2 (%)
-                </label>
+                <label style={{ fontSize: '0.78rem', color: '#64748b', fontWeight: 700 }}>💨 {isMarathi ? 'ऑक्सिजन SpO₂ (%)' : 'SpO2 (%)'}</label>
                 <input
                   type="number"
                   value={spo2}
                   onChange={(e) => setSpo2(e.target.value)}
-                  className="form-input"
-                  style={{
-                    borderColor: parseFloat(spo2) < 94 ? 'var(--risk-red)' : 'var(--slate-200)',
-                    fontWeight: 700,
-                  }}
+                  style={{ width: '100%', padding: '8px 12px', borderRadius: '10px', border: '1px solid #cbd5e1', fontWeight: 700 }}
                 />
-                <span style={{ fontSize: '0.7rem', color: 'var(--slate-500)' }}>
-                  {parseFloat(spo2) < 92 ? '🚨 Hypoxia Alert' : 'Normal: >=95%'}
-                </span>
               </div>
-
-              {/* Respiratory Rate */}
               <div>
-                <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <Wind size={14} color="#64748b" /> Resp Rate (/min)
-                </label>
+                <label style={{ fontSize: '0.78rem', color: '#64748b', fontWeight: 700 }}>⏱️ {isMarathi ? 'कालावधी (दिवस)' : 'Duration (Days)'}</label>
                 <input
                   type="number"
-                  value={respRate}
-                  onChange={(e) => setRespRate(e.target.value)}
-                  className="form-input"
-                  style={{ fontWeight: 700 }}
+                  value={durationDays}
+                  onChange={(e) => setDurationDays(e.target.value)}
+                  style={{ width: '100%', padding: '8px 12px', borderRadius: '10px', border: '1px solid #cbd5e1', fontWeight: 700 }}
                 />
-                <span style={{ fontSize: '0.7rem', color: 'var(--slate-500)' }}>Normal: 12-20</span>
               </div>
             </div>
           </div>
 
-          {/* Chief Complaints Multi-Select Pills */}
-          <div className="glass-panel" style={{ padding: '14px' }}>
-            <label className="form-label">Chief Complaints / Presenting Symptoms</label>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '6px' }}>
-              {COMMON_COMPLAINTS.map((c) => {
-                const isSelected = selectedComplaints.includes(c);
-                const isUrgent =
-                  c.includes('Chest Pain') ||
-                  c.includes('Bleeding') ||
-                  c.includes('Convulsions') ||
-                  c.includes('Breathlessness');
+          {/* Observations and Urgency */}
+          <div style={{ marginBottom: '20px' }}>
+            <label style={{ display: 'block', fontSize: '0.9rem', fontWeight: 800, color: '#0f172a', marginBottom: '6px' }}>
+              {isMarathi ? '३. आशा सेविकेचे निरीक्षण / नोंद (Observations)' : '3. ASHA Field Observations & Notes'}
+            </label>
+            <textarea
+              rows={2}
+              placeholder={isMarathi ? 'उदा. खूप थकवा दिसत आहे, जेवण जात नाही, औषधोपचार आवश्यक वाटतो...' : 'e.g., Patient looks very weak, unable to eat, needs doctor evaluation...'}
+              value={clinicalNotes}
+              onChange={(e) => setClinicalNotes(e.target.value)}
+              style={{ width: '100%', padding: '12px 14px', borderRadius: '12px', border: '1.5px solid #cbd5e1', fontSize: '0.95rem', boxSizing: 'border-box', outline: 'none' }}
+            />
+          </div>
+
+          {/* Urgency Badge Indicator */}
+          <div style={{ padding: '14px 18px', borderRadius: '14px', background: effectiveRiskLevel === 'RED' ? '#fef2f2' : effectiveRiskLevel === 'YELLOW' ? '#fffbeb' : '#f0fdf4', border: `1.5px solid ${effectiveRiskLevel === 'RED' ? '#f87171' : effectiveRiskLevel === 'YELLOW' ? '#fde047' : '#86efac'}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
+            <div>
+              <div style={{ fontWeight: 800, color: effectiveRiskLevel === 'RED' ? '#b91c1c' : effectiveRiskLevel === 'YELLOW' ? '#854d0e' : '#15803d' }}>
+                {effectiveRiskLevel === 'RED' ? '🚨 आणीबाणी / तातडीने डॉक्टर हवेत (Emergency / Red Flag)' : effectiveRiskLevel === 'YELLOW' ? '⚠️ मध्यम जोखीम (Doctor Attention Needed)' : '🟢 सामान्य तपासणी (Routine Checkup)'}
+              </div>
+              <div style={{ fontSize: '0.82rem', color: '#64748b' }}>
+                {computedRisk.rationale.join('; ') || (isMarathi ? 'मापदंडांनुसार मूल्यांकन' : 'Calculated by triage engine')}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button
+                type="button"
+                onClick={() => setUrgencyOverride('RED')}
+                style={{
+                  padding: '6px 10px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  background: urgencyOverride === 'RED' ? '#ef4444' : '#fee2e2',
+                  color: urgencyOverride === 'RED' ? '#ffffff' : '#991b1b',
+                  fontSize: '0.78rem',
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                }}
+              >
+                🚨 {isMarathi ? 'तातडीची आणीबाणी' : 'Mark Emergency'}
+              </button>
+            </div>
+          </div>
+
+          {/* Submit to Doctor Button */}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+            <button
+              type="button"
+              onClick={() => setActiveMode('my_care')}
+              style={{ padding: '14px 20px', borderRadius: '14px', border: '1.5px solid #cbd5e1', background: '#ffffff', color: '#475569', fontWeight: 700, cursor: 'pointer' }}
+            >
+              {isMarathi ? 'मागे जा' : 'Back'}
+            </button>
+            <button
+              type="button"
+              disabled={isSubmittingCase}
+              onClick={handleSendToDoctor}
+              style={{
+                padding: '14px 28px',
+                borderRadius: '14px',
+                border: 'none',
+                background: 'linear-gradient(135deg, #0d9488 0%, #0f766e 100%)',
+                color: '#ffffff',
+                fontWeight: 900,
+                fontSize: '1.05rem',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                boxShadow: '0 4px 14px rgba(13,148,136,0.3)',
+              }}
+            >
+              <Send size={18} />
+              <span>{isSubmittingCase ? (isMarathi ? 'पाठवत आहे...' : 'Sending...') : (isMarathi ? 'डॉक्टरांकडे पाठवा ➔' : 'Send to Doctor ➔')}</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* -------------------------------------------------------------------- */}
+      {/* MODE 4: MY CARE TRACKING DASHBOARD */}
+      {/* -------------------------------------------------------------------- */}
+      {activeMode === 'my_care' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {/* Status Filter Pills */}
+          <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '4px' }}>
+            {[
+              { id: 'ALL', labelMr: 'सर्व केसेस', labelEn: 'All Cases' },
+              { id: 'WAITING_FOR_DOCTOR', labelMr: '🟡 डॉक्टरांची प्रतीक्षा', labelEn: '🟡 Waiting for Doctor' },
+              { id: 'DOCTOR_RESPONDED', labelMr: '🟢 डॉक्टरांचा सल्ला आला', labelEn: '🟢 Doctor Responded' },
+              { id: 'FOLLOWUP_REQUIRED', labelMr: '🟠 पुन्हा तपासणी हवी', labelEn: '🟠 Follow-up Due' },
+              { id: 'COMPLETED', labelMr: '✅ पूर्ण झालेल्या', labelEn: '✅ Completed' },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setStatusFilter(tab.id)}
+                style={{
+                  padding: '8px 14px',
+                  borderRadius: '20px',
+                  border: statusFilter === tab.id ? '2px solid #0d9488' : '1.5px solid #cbd5e1',
+                  background: statusFilter === tab.id ? '#0d9488' : '#ffffff',
+                  color: statusFilter === tab.id ? '#ffffff' : '#334155',
+                  fontSize: '0.84rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                  transition: 'all 0.1s ease',
+                }}
+              >
+                {isMarathi ? tab.labelMr : tab.labelEn}
+              </button>
+            ))}
+          </div>
+
+          {/* Cases List */}
+          {careCases.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '40px 20px', background: '#ffffff', borderRadius: '24px', border: '1.5px solid #e2e8f0' }}>
+              <Heart size={44} color="#0d9488" style={{ marginBottom: '12px', opacity: 0.6 }} />
+              <h3 style={{ margin: '0 0 8px 0', fontSize: '1.25rem', color: '#0f172a' }}>
+                {isMarathi ? 'सध्या या वर्गवारीत कोणतीही केस नाही.' : 'No cases in this status category.'}
+              </h3>
+              <p style={{ margin: '0 0 16px 0', color: '#64748b', fontSize: '0.9rem' }}>
+                {isMarathi ? 'गावातील रुग्ण शोधून किंवा नोंदणी करून थेट डॉक्टरांकडे पाठवा.' : 'Find or register a village patient to send their case to the doctor.'}
+              </p>
+              <button
+                type="button"
+                onClick={() => setActiveMode('find_patient')}
+                style={{
+                  padding: '10px 20px',
+                  borderRadius: '12px',
+                  border: 'none',
+                  background: '#0d9488',
+                  color: '#ffffff',
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                }}
+              >
+                🔍 {isMarathi ? 'रुग्ण शोधा किंवा जोडा' : 'Find or Register Patient'}
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(290px, 1fr))', gap: '14px' }}>
+              {careCases.map((c) => {
+                const pat = c.patientData || {};
+                const status = c.status || 'WAITING_FOR_DOCTOR';
+                const complaintsStr = Array.isArray(c.chiefComplaints) ? c.chiefComplaints.join(', ') : c.chiefComplaints || 'General malaise';
+                const isRed = c.riskLevel === 'RED';
 
                 return (
-                  <button
-                    key={c}
-                    type="button"
-                    onClick={() => toggleComplaint(c)}
+                  <div
+                    key={c.id}
                     style={{
-                      padding: '6px 10px',
-                      borderRadius: '999px',
-                      fontSize: '0.75rem',
-                      fontWeight: 600,
-                      background: isSelected
-                        ? isUrgent
-                          ? 'var(--risk-red)'
-                          : 'var(--primary)'
-                        : 'var(--slate-100)',
-                      color: isSelected ? '#ffffff' : 'var(--slate-700)',
-                      border: isSelected ? 'none' : '1px solid var(--slate-200)',
-                      transition: 'all 0.15s ease',
+                      background: '#ffffff',
+                      borderRadius: '20px',
+                      padding: '18px 20px',
+                      border: isRed ? '2px solid #f87171' : '1.5px solid #e2e8f0',
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'space-between',
+                      gap: '14px',
                     }}
                   >
-                    {isSelected ? '✓ ' : '+ '}
-                    {c}
-                  </button>
+                    <div>
+                      {/* Top status & urgency */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                        {renderStatusBadge(status)}
+                        {isRed && (
+                          <span style={{ background: '#fee2e2', color: '#991b1b', fontSize: '0.72rem', fontWeight: 800, padding: '2px 8px', borderRadius: '6px' }}>
+                            🚨 {isMarathi ? 'आणीबाणी' : 'Emergency'}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Patient Details */}
+                      <h3 style={{ margin: '0 0 4px 0', fontSize: '1.2rem', fontWeight: 900, color: '#0f172a' }}>
+                        {pat.name}
+                      </h3>
+                      <div style={{ fontSize: '0.84rem', color: '#64748b', marginBottom: '10px' }}>
+                        {pat.age} {isMarathi ? 'वर्षे' : 'yrs'} • {pat.gender} • 📍 {pat.village || 'Sakarra'}
+                      </div>
+
+                      {/* Symptoms */}
+                      <div style={{ background: '#f8fafc', padding: '10px 12px', borderRadius: '10px', fontSize: '0.86rem', color: '#334155', fontWeight: 600, marginBottom: '10px' }}>
+                        🩺 {complaintsStr}
+                      </div>
+
+                      {/* Doctor response snippet if available */}
+                      {c.doctorAdvice && (
+                        <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', padding: '10px 12px', borderRadius: '10px', fontSize: '0.85rem', color: '#065f46', fontWeight: 600, marginBottom: '6px' }}>
+                          💬 <strong>{isMarathi ? 'डॉक्टरांचा सल्ला:' : 'Doctor Advice:'}</strong> {c.doctorAdvice}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Action button */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #f1f5f9', paddingTop: '10px' }}>
+                      <span style={{ fontSize: '0.78rem', color: '#94a3b8' }}>
+                        {c.encounterDate ? new Date(c.encounterDate).toLocaleDateString() : 'Today'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCaseModal(c)}
+                        style={{
+                          padding: '8px 14px',
+                          borderRadius: '10px',
+                          border: 'none',
+                          background: '#0d9488',
+                          color: '#ffffff',
+                          fontSize: '0.85rem',
+                          fontWeight: 800,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {isMarathi ? 'केस पहा ➔' : 'View Case ➔'}
+                      </button>
+                    </div>
+                  </div>
                 );
               })}
             </div>
-
-            <div style={{ marginTop: '12px' }}>
-              <label className="form-label">Clinical Notes / Field Observations</label>
-              <textarea
-                rows={2}
-                value={clinicalNotes}
-                onChange={(e) => setClinicalNotes(e.target.value)}
-                placeholder="Observed signs, pedal edema, skin turgor, home medications given..."
-                className="form-input"
-                style={{ resize: 'none' }}
-              />
-            </div>
-          </div>
-
-          {/* Maternal / Child Health High-Risk Check */}
-          <div
-            className="glass-panel"
-            style={{
-              padding: '12px 14px',
-              borderLeft: '4px solid #db2777',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '8px',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#9d174d' }}>
-                🤰 Maternal (ANC) & Child Health Surveillance
-              </span>
-              <input
-                type="checkbox"
-                checked={isPregnantCheck}
-                onChange={(e) => setIsPregnantCheck(e.target.checked)}
-                style={{ width: '18px', height: '18px' }}
-              />
-            </div>
-
-            {isPregnantCheck && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '4px' }}>
-                <div>
-                  <label className="form-label" style={{ fontSize: '0.75rem' }}>
-                    Gestational Weeks
-                  </label>
-                  <input
-                    type="number"
-                    value={gestationalWeeks}
-                    onChange={(e) => setGestationalWeeks(e.target.value)}
-                    className="form-input"
-                    style={{ padding: '6px 10px', fontSize: '0.85rem' }}
-                  />
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', paddingTop: '18px' }}>
-                  <input
-                    type="checkbox"
-                    checked={riskAssessment.isMaternalHighRisk}
-                    readOnly
-                    style={{ accentColor: 'var(--risk-red)' }}
-                  />
-                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--risk-red-dark)' }}>
-                    High-Risk Pregnancy Flag
-                  </span>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Automated Clinical Triage Risk Card */}
-          <div
-            style={{
-              padding: '16px',
-              borderRadius: 'var(--radius-lg)',
-              background:
-                riskAssessment.riskLevel === 'RED'
-                  ? 'var(--risk-red-bg)'
-                  : riskAssessment.riskLevel === 'YELLOW'
-                  ? 'var(--risk-yellow-bg)'
-                  : 'var(--risk-green-bg)',
-              border: `2px solid ${
-                riskAssessment.riskLevel === 'RED'
-                  ? 'var(--risk-red)'
-                  : riskAssessment.riskLevel === 'YELLOW'
-                  ? 'var(--risk-yellow)'
-                  : 'var(--risk-green)'
-              }`,
-              boxShadow:
-                riskAssessment.riskLevel === 'RED'
-                  ? '0 0 16px var(--risk-red-glow)'
-                  : 'none',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span
-                  style={{
-                    width: '14px',
-                    height: '14px',
-                    borderRadius: '50%',
-                    background:
-                      riskAssessment.riskLevel === 'RED'
-                        ? 'var(--risk-red)'
-                        : riskAssessment.riskLevel === 'YELLOW'
-                        ? 'var(--risk-yellow)'
-                        : 'var(--risk-green)',
-                  }}
-                  className={riskAssessment.riskLevel === 'RED' ? 'beacon-red' : ''}
-                />
-                <span
-                  style={{
-                    fontWeight: 800,
-                    fontSize: '1.1rem',
-                    color:
-                      riskAssessment.riskLevel === 'RED'
-                        ? 'var(--risk-red-dark)'
-                        : riskAssessment.riskLevel === 'YELLOW'
-                        ? 'var(--risk-yellow-dark)'
-                        : 'var(--risk-green-dark)',
-                  }}
-                >
-                  {riskAssessment.riskLevel} TAG • {riskAssessment.riskLevel === 'RED' ? 'EMERGENCY' : riskAssessment.riskLevel === 'YELLOW' ? 'MODERATE RISK' : 'STABLE'}
-                </span>
-              </div>
-              <span style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase' }}>
-                Algorithmic Triage
-              </span>
-            </div>
-
-            <div style={{ marginTop: '10px' }}>
-              <div style={{ fontSize: '0.8rem', fontWeight: 700, marginBottom: '4px' }}>
-                Clinical Rationale:
-              </div>
-              <ul style={{ paddingLeft: '18px', fontSize: '0.78rem', lineHeight: '1.4' }}>
-                {riskAssessment.rationale.map((r, i) => (
-                  <li key={i}>{r}</li>
-                ))}
-              </ul>
-            </div>
-
-            <div
-              style={{
-                marginTop: '10px',
-                paddingTop: '8px',
-                borderTop: '1px dashed rgba(0,0,0,0.15)',
-                fontSize: '0.8rem',
-                fontWeight: 600,
-              }}
-            >
-              Action: {riskAssessment.recommendedAction}
-            </div>
-          </div>
-
-          {/* Submission & Action Buttons */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <button
-              onClick={() => handleSubmitTriage()}
-              className="btn-primary"
-              style={{ width: '100%', padding: '14px' }}
-            >
-              <CheckCircle size={18} /> Save Triage (Offline Safe)
-            </button>
-
-            {riskAssessment.riskLevel === 'RED' && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                <button
-                  onClick={() => handleSubmitTriage({ requestTeleconsult: true })}
-                  className="btn-danger"
-                  style={{ fontSize: '0.8rem', padding: '10px 8px' }}
-                >
-                  <Phone size={14} /> Request Video MO
-                </button>
-                <button
-                  onClick={() => handleSubmitTriage({ createReferral: true })}
-                  className="btn-secondary"
-                  style={{
-                    borderColor: 'var(--risk-red-border)',
-                    color: 'var(--risk-red-dark)',
-                    fontSize: '0.8rem',
-                    padding: '10px 8px',
-                  }}
-                >
-                  <Send size={14} /> Referral to DH
-                </button>
-              </div>
-            )}
-          </div>
+          )}
         </div>
       )}
 
-      {/* ------------------------------------------------------------- */}
-      {/* TAB 2: PATIENT REGISTRATION FORM                              */}
-      {/* ------------------------------------------------------------- */}
-      {activeTab === 'register' && (
-        <form onSubmit={handleRegisterPatient} className="glass-panel" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--slate-900)' }}>
-              ABDM Patient Registration
-            </div>
-            <button
-              type="button"
-              onClick={generateDemoAbha}
-              style={{
-                fontSize: '0.75rem',
-                fontWeight: 600,
-                color: 'var(--primary)',
-                background: 'var(--primary-light)',
-                padding: '4px 8px',
-                borderRadius: 'var(--radius-sm)',
-              }}
-            >
-              Generate Demo ABHA
-            </button>
-          </div>
-
-          <div>
-            <label className="form-label">ABHA ID (Ayushman Bharat Health Account)</label>
-            <input
-              type="text"
-              placeholder="e.g. 91-4523-8891-2341"
-              value={regAbha}
-              onChange={(e) => setRegAbha(e.target.value)}
-              className="form-input"
-            />
-          </div>
-
-          <div>
-            <label className="form-label">Full Name *</label>
-            <input
-              type="text"
-              required
-              placeholder="e.g. Meena Bai Patel"
-              value={regName}
-              onChange={(e) => setRegName(e.target.value)}
-              className="form-input"
-            />
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-            <div>
-              <label className="form-label">Age (Years) *</label>
-              <input
-                type="number"
-                required
-                placeholder="28"
-                value={regAge}
-                onChange={(e) => setRegAge(e.target.value)}
-                className="form-input"
-              />
-            </div>
-            <div>
-              <label className="form-label">Gender</label>
-              <select
-                value={regGender}
-                onChange={(e) => setRegGender(e.target.value as any)}
-                className="form-input"
+      {/* Case Details & Follow-up Modal */}
+      {selectedCaseModal && (
+        <div
+          role="dialog"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9999,
+            background: 'rgba(15, 23, 42, 0.65)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '16px',
+          }}
+        >
+          <div
+            style={{
+              background: '#ffffff',
+              borderRadius: '24px',
+              maxWidth: '600px',
+              width: '100%',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              padding: '24px',
+              boxShadow: '0 20px 40px rgba(0,0,0,0.2)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div>
+                <div style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 700 }}>
+                  {isMarathi ? 'आशा पाठपुरावा व केस तपशील' : 'ASHA Follow-up & Case Details'}
+                </div>
+                <h2 style={{ margin: 0, fontSize: '1.4rem', fontWeight: 900, color: '#0f172a' }}>
+                  {selectedCaseModal.patientData?.name}
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedCaseModal(null)}
+                style={{ background: '#f1f5f9', border: 'none', borderRadius: '50%', width: '36px', height: '36px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
               >
-                <option value="female">Female</option>
-                <option value="male">Male</option>
-                <option value="other">Other</option>
-              </select>
+                <X size={18} />
+              </button>
             </div>
-          </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-            <div>
-              <label className="form-label">Phone Number *</label>
-              <input
-                type="tel"
-                required
-                placeholder="+91 98261..."
-                value={regPhone}
-                onChange={(e) => setRegPhone(e.target.value)}
-                className="form-input"
-              />
+            {/* Status pill */}
+            <div style={{ marginBottom: '16px' }}>
+              {renderStatusBadge(selectedCaseModal.status || 'WAITING_FOR_DOCTOR')}
             </div>
-            <div>
-              <label className="form-label">Blood Group</label>
-              <select
-                value={regBloodGroup}
-                onChange={(e) => setRegBloodGroup(e.target.value)}
-                className="form-input"
+
+            {/* Vitals Summary */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', background: '#f8fafc', padding: '14px', borderRadius: '14px', marginBottom: '16px' }}>
+              <div>
+                <span style={{ fontSize: '0.75rem', color: '#64748b' }}>{isMarathi ? 'तापमान' : 'Temperature'}</span>
+                <div style={{ fontWeight: 800 }}>{selectedCaseModal.temperatureF || 98.6}°F</div>
+              </div>
+              <div>
+                <span style={{ fontSize: '0.75rem', color: '#64748b' }}>BP</span>
+                <div style={{ fontWeight: 800 }}>{selectedCaseModal.systolicBP || 120}/{selectedCaseModal.diastolicBP || 80}</div>
+              </div>
+              <div>
+                <span style={{ fontSize: '0.75rem', color: '#64748b' }}>SpO2</span>
+                <div style={{ fontWeight: 800 }}>{selectedCaseModal.spo2 || 98}%</div>
+              </div>
+            </div>
+
+            {/* Symptoms & Notes */}
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ fontSize: '0.85rem', fontWeight: 800, color: '#334155', marginBottom: '4px' }}>
+                {isMarathi ? 'लक्षणे व आशा नोंद:' : 'Symptoms & Field Notes:'}
+              </div>
+              <div style={{ color: '#0f172a', fontWeight: 600 }}>
+                {Array.isArray(selectedCaseModal.chiefComplaints) ? selectedCaseModal.chiefComplaints.join(', ') : selectedCaseModal.chiefComplaints}
+              </div>
+              {selectedCaseModal.clinicalNotes && (
+                <div style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '4px' }}>
+                  {selectedCaseModal.clinicalNotes}
+                </div>
+              )}
+            </div>
+
+            {/* Doctor Advice / Treatment */}
+            <div style={{ background: '#f0fdf4', border: '1.5px solid #86efac', padding: '16px', borderRadius: '16px', marginBottom: '20px' }}>
+              <div style={{ fontWeight: 800, color: '#166534', fontSize: '0.95rem', marginBottom: '6px' }}>
+                🩺 {isMarathi ? 'डॉक्टरांचा सल्ला व उपचार (Doctor Advice)' : 'Doctor Advice & Plan'}
+              </div>
+              <div style={{ fontSize: '0.9rem', color: '#14532d' }}>
+                {selectedCaseModal.doctorAdvice || (isMarathi ? 'डॉक्टरांनी अद्याप सल्ला दिलेला नाही. केस प्रतीक्षेत आहे.' : 'Case is currently waiting for doctor evaluation.')}
+              </div>
+            </div>
+
+            {/* Follow-up actions */}
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await fetch('/api/encounters', {
+                      method: 'PATCH',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        ...getAuthHeaders('ASHA'),
+                      },
+                      body: JSON.stringify({
+                        id: selectedCaseModal.id,
+                        status: 'COMPLETED',
+                        clinicalNotes: `${selectedCaseModal.clinicalNotes || ''} [ASHA Follow-up completed]`,
+                      }),
+                    });
+                    showToast(isMarathi ? '✓ केस पूर्ण म्हणून चिन्हांकित केली!' : '✓ Case marked completed!');
+                    setSelectedCaseModal(null);
+                    await loadData();
+                  } catch (e) {
+                    showToast('Failed to update case');
+                  }
+                }}
+                style={{
+                  padding: '12px 20px',
+                  borderRadius: '12px',
+                  border: 'none',
+                  background: '#0d9488',
+                  color: '#ffffff',
+                  fontWeight: 800,
+                  fontSize: '0.95rem',
+                  cursor: 'pointer',
+                }}
               >
-                <option value="A+">A+</option>
-                <option value="A-">A-</option>
-                <option value="B+">B+</option>
-                <option value="B-">B-</option>
-                <option value="O+">O+</option>
-                <option value="O-">O-</option>
-                <option value="AB+">AB+</option>
-                <option value="AB-">AB-</option>
-              </select>
+                ✓ {isMarathi ? 'पाठपुरावा पूर्ण झाला (Mark Complete)' : 'Mark Follow-up Completed'}
+              </button>
             </div>
           </div>
-
-          <div>
-            <label className="form-label">Father / Husband Name</label>
-            <input
-              type="text"
-              placeholder="e.g. Santosh Patel (Husband)"
-              value={regGuardian}
-              onChange={(e) => setRegGuardian(e.target.value)}
-              className="form-input"
-            />
-          </div>
-
-          <div>
-            <label className="form-label">Village / Habitation</label>
-            <select
-              value={regVillage}
-              onChange={(e) => setRegVillage(e.target.value)}
-              className="form-input"
-            >
-              <option value="Bilaspur Gram">Bilaspur Gram</option>
-              <option value="Khaira">Khaira</option>
-              <option value="Jamgaon">Jamgaon</option>
-              <option value="Bilha Town">Bilha Town</option>
-            </select>
-          </div>
-
-          {/* Maternal Enrollment */}
-          <div
-            style={{
-              padding: '10px',
-              background: '#fdf2f8',
-              borderRadius: 'var(--radius-md)',
-              border: '1px solid #fbcfe8',
-            }}
-          >
-            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={regIsPregnant}
-                onChange={(e) => setRegIsPregnant(e.target.checked)}
-                style={{ width: '16px', height: '16px' }}
-              />
-              <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#9d174d' }}>
-                Enroll as Pregnant Mother (ANC Tracker)
-              </span>
-            </label>
-
-            {regIsPregnant && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '8px' }}>
-                <div>
-                  <label className="form-label" style={{ fontSize: '0.75rem' }}>
-                    Gestational Weeks
-                  </label>
-                  <input
-                    type="number"
-                    placeholder="e.g. 24"
-                    value={regWeeks}
-                    onChange={(e) => setRegWeeks(e.target.value)}
-                    className="form-input"
-                  />
-                </div>
-                <div>
-                  <label className="form-label" style={{ fontSize: '0.75rem' }}>
-                    Expected Delivery Date (EDD)
-                  </label>
-                  <input
-                    type="date"
-                    value={regEdd}
-                    onChange={(e) => setRegEdd(e.target.value)}
-                    className="form-input"
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-
-          <button type="submit" className="btn-primary" style={{ width: '100%', marginTop: '6px' }}>
-            <UserPlus size={16} /> Register & Save (Offline Dexie)
-          </button>
-        </form>
-      )}
-
-      {/* ------------------------------------------------------------- */}
-      {/* TAB 3: OFFLINE VAULT & DEXIE DATABASE INSPECTOR               */}
-      {/* ------------------------------------------------------------- */}
-      {activeTab === 'offline_vault' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <div className="glass-panel" style={{ padding: '14px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-              <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>Dexie.js IndexedDB Records</span>
-              <span style={{ fontSize: '0.75rem', color: 'var(--slate-500)' }}>
-                {vaultEncounters.length} triage records cached
-              </span>
-            </div>
-            <p style={{ fontSize: '0.8rem', color: 'var(--slate-600)' }}>
-              All records below are stored locally inside the frontline worker's device storage (IndexedDB). They are available 100% offline and automatically sync when network is restored.
-            </p>
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {vaultEncounters.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '24px', color: 'var(--slate-400)', fontSize: '0.85rem' }}>
-                No triage encounters captured on this device yet.
-              </div>
-            ) : (
-              vaultEncounters.map((enc) => (
-                <div
-                  key={enc.id}
-                  className="glass-panel"
-                  style={{
-                    padding: '12px',
-                    borderLeft: `4px solid ${
-                      enc.riskLevel === 'RED'
-                        ? 'var(--risk-red)'
-                        : enc.riskLevel === 'YELLOW'
-                        ? 'var(--risk-yellow)'
-                        : 'var(--risk-green)'
-                    }`,
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontWeight: 700, fontSize: '0.88rem' }}>{enc.patientName}</span>
-                    <span
-                      className={`badge-${enc.riskLevel.toLowerCase()}`}
-                      style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '0.72rem' }}
-                    >
-                      {enc.riskLevel}
-                    </span>
-                  </div>
-
-                  <div style={{ fontSize: '0.75rem', color: 'var(--slate-500)', marginTop: '4px' }}>
-                    ABHA: {enc.patientAbhaId} • {new Date(enc.encounterDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </div>
-
-                  <div style={{ fontSize: '0.78rem', color: 'var(--slate-700)', marginTop: '4px' }}>
-                    Vitals: BP {enc.systolicBP || '--'}/{enc.diastolicBP || '--'} | SpO2 {enc.spo2 || '--'}% | Temp {enc.temperatureF || '--'}°F | Pulse {enc.pulseRate || '--'} bpm
-                  </div>
-
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px' }}>
-                    <span style={{ fontSize: '0.72rem', color: 'var(--slate-600)' }}>
-                      Complaints: {enc.chiefComplaints.slice(0, 2).join(', ')}
-                    </span>
-                    <span
-                      style={{
-                        fontSize: '0.7rem',
-                        fontWeight: 700,
-                        color: enc.syncStatus === 'synced' ? 'var(--risk-green-dark)' : '#b45309',
-                      }}
-                    >
-                      {enc.syncStatus === 'synced' ? '✓ Synced' : '⏳ Pending Sync'}
-                    </span>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
         </div>
-      )}
-    </div>
-  );
-
-  return (
-    <div style={{ width: '100%' }}>
-      {isPhoneFrame ? (
-        <div className="mobile-device-frame">
-          <div className="mobile-notch" />
-          <div style={{ height: 'calc(100% - 22px)', overflowY: 'auto' }}>{content}</div>
-        </div>
-      ) : (
-        <div style={{ maxWidth: '800px', margin: '0 auto' }}>{content}</div>
       )}
     </div>
   );

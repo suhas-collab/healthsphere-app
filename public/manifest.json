@@ -1,7 +1,7 @@
 {
-  "name": "SwasthyaSeva - Frontline Healthcare PWA",
-  "short_name": "SwasthyaSeva",
-  "description": "Offline-first clinical triage and patient care PWA for frontline ASHA and ANM workers.",
+  "name": "Arogya Mitra - Digital Rural Healthcare Assistant",
+  "short_name": "Arogya Mitra",
+  "description": "Digital rural healthcare assistant connecting patients, ASHA workers, and doctors.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0d9488",

@@ -63,6 +63,12 @@ export interface LocalEncounter {
   createReferral?: boolean;
   referralPriority?: 'STAT' | 'URGENT' | 'ROUTINE';
 
+  // Case Lifecycle & Doctor Notes
+  status?: string;
+  doctorNotes?: string;
+  doctorDiagnosis?: string;
+  doctorAdvice?: string;
+
   // Offline Sync metadata
   syncStatus: 'synced' | 'pending_sync' | 'sync_error';
   syncError?: string;

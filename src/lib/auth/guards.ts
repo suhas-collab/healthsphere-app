@@ -3,6 +3,8 @@ import { prisma } from '@/lib/prisma';
 import { supabaseAuthServer } from './supabase';
 import { ClinicalRole, AuthenticatedUser, AuthValidationResult } from './types';
 
+import { clinicalData } from '@/lib/clinicalData';
+
 /**
  * Extracts bearer token or session cookie from an incoming Next.js request.
  */
@@ -62,15 +64,24 @@ export async function verifyAuth(
           'ASHA') as ClinicalRole;
 
         // Verify if linked to a Prisma HealthWorker
-        const worker = await prisma.healthWorker.findFirst({
-          where: {
-            OR: [
-              { phone: sbUser.phone || undefined },
-              { workerCode: sbUser.user_metadata?.workerCode || undefined },
-            ],
-            isActive: true,
-          },
-        });
+        let worker: any = null;
+        try {
+          worker = await prisma.healthWorker.findFirst({
+            where: {
+              OR: [
+                { phone: sbUser.phone || undefined },
+                { workerCode: sbUser.user_metadata?.workerCode || undefined },
+              ],
+              isActive: true,
+            },
+          });
+        } catch {
+          const workers = clinicalData.getHealthWorkers();
+          worker = workers.find(
+            w => (sbUser.phone && w.phone === sbUser.phone) ||
+                 (sbUser.user_metadata?.workerCode && w.workerCode === sbUser.user_metadata.workerCode)
+          );
+        }
 
         user = {
           id: sbUser.id,
@@ -83,7 +94,32 @@ export async function verifyAuth(
         };
       }
     } catch (jwtErr) {
-      console.warn('Supabase JWT verification error:', jwtErr);
+      console.warn('Supabase JWT verification network error, attempting offline token decode:', jwtErr);
+    }
+
+    // Offline / fallback JWT decoding if Supabase project network is unreachable
+    if (!user) {
+      try {
+        const parts = token.split('.');
+        const payloadJson = Buffer.from(parts[1], 'base64').toString('utf-8');
+        const payload = JSON.parse(payloadJson);
+        const roleCandidate = (payload.role || payload.user_metadata?.role || payload.app_metadata?.role) as ClinicalRole;
+        if (roleCandidate) {
+          const workers = clinicalData.getHealthWorkers();
+          const worker = workers.find(w => w.role === roleCandidate && w.isActive);
+          user = {
+            id: payload.sub || payload.userId || (worker ? worker.id : `worker_${roleCandidate.toLowerCase()}`),
+            email: payload.email,
+            role: roleCandidate,
+            workerCode: payload.workerCode || worker?.workerCode,
+            workerName: payload.name || worker?.name,
+            facilityId: payload.facilityId || worker?.facilityId,
+            authSource: 'supabase_jwt',
+          };
+        }
+      } catch {
+        // Not a decodable JWT payload
+      }
     }
   }
 
@@ -101,6 +137,7 @@ export async function verifyAuth(
       'MEDICAL_OFFICER',
       'DISTRICT_HEALTH_OFFICER',
       'ADMIN',
+      'PATIENT',
     ];
 
     let matchedRole: ClinicalRole | null = null;
@@ -117,22 +154,65 @@ export async function verifyAuth(
 
     if (matchedRole) {
       const roleCandidate = matchedRole;
-      const worker = workerCodeCandidate && workerCodeCandidate !== 'active' && workerCodeCandidate !== 'test'
-        ? await prisma.healthWorker.findFirst({
-            where: { workerCode: { equals: workerCodeCandidate, mode: 'insensitive' }, isActive: true },
-          })
-        : await prisma.healthWorker.findFirst({
-            where: { role: roleCandidate, isActive: true },
-          });
 
-      user = {
-        id: worker ? worker.id : `worker_${roleCandidate.toLowerCase()}`,
-        role: roleCandidate,
-        workerCode: worker?.workerCode,
-        workerName: worker?.name,
-        facilityId: worker?.facilityId,
-        authSource: 'worker_session',
-      };
+      if (roleCandidate === 'PATIENT') {
+        const headerPatientId = req.headers.get('x-patient-id') || undefined;
+        let resolvedPatientId =
+          workerCodeCandidate && workerCodeCandidate !== 'active' && workerCodeCandidate !== 'test'
+            ? workerCodeCandidate
+            : headerPatientId;
+
+        let patient: any = null;
+        if (resolvedPatientId && resolvedPatientId.startsWith('phone_')) {
+          const rawPhone = resolvedPatientId.substring(6).replace(/\D/g, '');
+          const pats = await clinicalData.getPatients();
+          patient = pats.find((p) => p.phone?.replace(/\D/g, '').endsWith(rawPhone));
+          if (patient) resolvedPatientId = patient.id;
+        } else if (resolvedPatientId) {
+          try {
+            patient = await prisma.patient.findUnique({ where: { id: resolvedPatientId } });
+          } catch {
+            const pats = await clinicalData.getPatients();
+            patient = pats.find((p) => p.id === resolvedPatientId);
+          }
+        }
+
+        user = {
+          id: patient ? patient.id : resolvedPatientId || 'patient_active',
+          role: 'PATIENT',
+          patientId: patient ? patient.id : resolvedPatientId,
+          workerName: patient?.name || 'Citizen Patient',
+          phone: patient?.phone,
+          authSource: 'worker_session',
+        };
+      } else {
+        let worker: any = null;
+        try {
+          worker =
+            workerCodeCandidate && workerCodeCandidate !== 'active' && workerCodeCandidate !== 'test'
+              ? await prisma.healthWorker.findFirst({
+                  where: { workerCode: { equals: workerCodeCandidate, mode: 'insensitive' }, isActive: true },
+                })
+              : await prisma.healthWorker.findFirst({
+                  where: { role: roleCandidate, isActive: true },
+                });
+        } catch {
+          const workers = clinicalData.getHealthWorkers();
+          worker =
+            workerCodeCandidate && workerCodeCandidate !== 'active' && workerCodeCandidate !== 'test'
+              ? workers.find((w) => w.workerCode?.toLowerCase() === workerCodeCandidate.toLowerCase() && w.isActive)
+              : workers.find((w) => w.role === roleCandidate && w.isActive);
+        }
+
+        user = {
+          id: worker ? worker.id : `worker_${roleCandidate.toLowerCase()}`,
+          role: roleCandidate,
+          workerCode: worker?.workerCode,
+          workerName: worker?.name,
+          facilityId: worker?.facilityId,
+          authSource: 'worker_session',
+        };
+      }
     }
   }
 

@@ -13,3 +13,4 @@ prisma/sqlite_data_backup.json
 .vercel
 .env*
 !.env.example
+scratch/

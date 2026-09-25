@@ -5,7 +5,8 @@ export type ClinicalRole =
   | 'ANM'
   | 'MEDICAL_OFFICER'
   | 'DISTRICT_HEALTH_OFFICER'
-  | 'ADMIN';
+  | 'ADMIN'
+  | 'PATIENT';
 
 export interface AuthenticatedUser {
   id: string;
@@ -14,6 +15,8 @@ export interface AuthenticatedUser {
   workerCode?: string;
   workerName?: string;
   facilityId?: string;
+  patientId?: string;
+  phone?: string;
   authSource: 'supabase_jwt' | 'worker_session';
 }
 

@@ -2,9 +2,9 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'SwasthyaSeva - Rural Public Healthcare MVP & Frontline PWA',
+  title: 'Arogya Mitra - Digital Rural Healthcare Assistant',
   description:
-    'Comprehensive FHIR-aligned rural healthcare platform for frontline ASHAs, PHC Medical Officers, and District Health Officers.',
+    'Digital rural healthcare assistant connecting patients, ASHA workers, and doctors in rural communities.',
   manifest: '/manifest.json',
   icons: {
     icon: '/favicon.ico',
@@ -18,6 +18,8 @@ export const viewport: Viewport = {
   themeColor: '#0d9488',
 };
 
+import { AppProviders } from '@/lib/i18n/AppProviders';
+
 export default function RootLayout({
   children,
 }: {
@@ -25,7 +27,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <AppProviders>{children}</AppProviders>
+      </body>
     </html>
   );
 }

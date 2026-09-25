@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth/guards';
+import { clinicalData } from '@/lib/clinicalData';
 
 export async function GET(req: NextRequest) {
-  const { errorResponse } = await requireAuth(req, [
+  const { user, errorResponse } = await requireAuth(req, [
     'ASHA',
     'ANM',
     'MEDICAL_OFFICER',
     'DISTRICT_HEALTH_OFFICER',
     'ADMIN',
+    'PATIENT',
   ]);
   if (errorResponse) return errorResponse;
 
@@ -16,55 +17,66 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const riskLevel = searchParams.get('riskLevel');
     const facilityId = searchParams.get('facilityId');
+    const requestedPatientId = searchParams.get('patientId');
 
-    const whereClause: any = {};
-    if (riskLevel && riskLevel !== 'ALL') {
-      whereClause.riskLevel = riskLevel;
+    // IDOR Protection: Patient can only access their own encounters
+    if (user?.role === 'PATIENT') {
+      const authPatientId = user.patientId;
+      if (requestedPatientId && authPatientId && requestedPatientId !== authPatientId) {
+        return NextResponse.json(
+          { error: "Forbidden: You are not authorized to view another patient's clinical encounters" },
+          { status: 403 }
+        );
+      }
+      const effectivePatientId = requestedPatientId || authPatientId;
+      const encounters = await clinicalData.getEncounters({ riskLevel, facilityId, patientId: effectivePatientId });
+      return NextResponse.json({ encounters });
     }
-    if (facilityId) {
-      whereClause.facilityId = facilityId;
-    }
 
-    const encounters = await prisma.encounter.findMany({
-      where: whereClause,
-      include: {
-        patient: true,
-        healthWorker: true,
-        facility: true,
-        teleconsultation: true,
-        referral: {
-          include: {
-            targetFacility: true,
-          },
-        },
-        prescriptions: {
-          include: {
-            items: true,
-          },
-        },
-      },
-      orderBy: [
-        // Custom priority: Red first, then Yellow, then Green, then latest
-        { encounterDate: 'desc' },
-      ],
-    });
-
-    // Custom clinical sort: RED -> YELLOW -> GREEN
-    const priorityOrder: Record<string, number> = { RED: 0, YELLOW: 1, GREEN: 2 };
-    const sorted = [...encounters].sort((a, b) => {
-      const pA = priorityOrder[a.riskLevel] ?? 3;
-      const pB = priorityOrder[b.riskLevel] ?? 3;
-      if (pA !== pB) return pA - pB;
-      return new Date(b.encounterDate).getTime() - new Date(a.encounterDate).getTime();
-    });
-
-    return NextResponse.json({ encounters: sorted });
+    const encounters = await clinicalData.getEncounters({ riskLevel, facilityId, patientId: requestedPatientId });
+    return NextResponse.json({ encounters });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    console.error('Error fetching encounters:', err);
+    return NextResponse.json({ error: err.message || 'Failed to fetch encounters' }, { status: 500 });
   }
 }
 
 export async function POST(req: NextRequest) {
+  const { user, errorResponse } = await requireAuth(req, [
+    'ASHA',
+    'ANM',
+    'MEDICAL_OFFICER',
+    'ADMIN',
+    'PATIENT',
+  ]);
+  if (errorResponse) return errorResponse;
+
+  try {
+    const body = await req.json();
+
+    // IDOR Protection: Patient can only create encounters for themselves
+    if (user?.role === 'PATIENT') {
+      const authPatientId = user.patientId;
+      if (body.patientId && authPatientId && body.patientId !== authPatientId) {
+        return NextResponse.json(
+          { error: "Forbidden: You are not authorized to book an encounter for another patient" },
+          { status: 403 }
+        );
+      }
+      if (!body.patientId && authPatientId) {
+        body.patientId = authPatientId;
+      }
+    }
+
+    const encounter = await clinicalData.createEncounter(body);
+    return NextResponse.json({ encounter }, { status: 201 });
+  } catch (err: any) {
+    console.error('Error creating encounter:', err);
+    return NextResponse.json({ error: err.message || 'Failed to create encounter' }, { status: 500 });
+  }
+}
+
+export async function PATCH(req: NextRequest) {
   const { errorResponse } = await requireAuth(req, [
     'ASHA',
     'ANM',
@@ -75,39 +87,20 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
+    const id = body.id || body.encounterId;
+    if (!id) {
+      return NextResponse.json({ error: 'Encounter ID is required' }, { status: 400 });
+    }
 
-    const encounter = await prisma.encounter.create({
-      data: {
-        patientId: body.patientId,
-        healthWorkerId: body.healthWorkerId,
-        facilityId: body.facilityId,
-        temperatureF: body.temperatureF ? parseFloat(body.temperatureF) : null,
-        systolicBP: body.systolicBP ? parseInt(body.systolicBP) : null,
-        diastolicBP: body.diastolicBP ? parseInt(body.diastolicBP) : null,
-        pulseRate: body.pulseRate ? parseInt(body.pulseRate) : null,
-        respiratoryRate: body.respiratoryRate ? parseInt(body.respiratoryRate) : null,
-        spo2: body.spo2 ? parseFloat(body.spo2) : null,
-        bloodGlucoseMgDl: body.bloodGlucoseMgDl ? parseFloat(body.bloodGlucoseMgDl) : null,
-        weightKg: body.weightKg ? parseFloat(body.weightKg) : null,
-        heightCm: body.heightCm ? parseFloat(body.heightCm) : null,
-        chiefComplaints: Array.isArray(body.chiefComplaints) ? body.chiefComplaints.join(', ') : body.chiefComplaints,
-        durationDays: body.durationDays ? parseInt(body.durationDays) : null,
-        clinicalNotes: body.clinicalNotes || '',
-        riskLevel: body.riskLevel || 'GREEN',
-        triageRationale: body.triageRationale || 'Point-of-care clinical assessment',
-        isHighRiskMaternal: Boolean(body.isHighRiskMaternal),
-        isHighRiskChild: Boolean(body.isHighRiskChild),
-        dangerSigns: body.dangerSigns || null,
-        status: body.status || 'COMPLETED',
-      },
-      include: {
-        patient: true,
-        facility: true,
-      },
-    });
+    const updated = await clinicalData.updateEncounter(id, body);
+    if (!updated) {
+      return NextResponse.json({ error: 'Encounter not found' }, { status: 404 });
+    }
 
-    return NextResponse.json({ encounter }, { status: 201 });
+    return NextResponse.json({ encounter: updated }, { status: 200 });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    console.error('Error updating encounter:', err);
+    return NextResponse.json({ error: err.message || 'Failed to update encounter' }, { status: 500 });
   }
 }
+

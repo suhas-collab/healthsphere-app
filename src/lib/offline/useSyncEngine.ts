@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { offlineDb, LocalPatient, LocalEncounter, SyncQueueItem } from './db';
 import { getAuthHeaders } from '@/lib/auth/client';
+import { useToast } from '@/lib/notifications/ToastContext';
 
 export interface SyncEngineState {
   isOnline: boolean;
@@ -16,6 +17,7 @@ export interface SyncEngineState {
 }
 
 export function useSyncEngine(): SyncEngineState {
+  const { notifyStoredLocally, notifyOffline, notifyOnline } = useToast();
   const [isOnline, setIsOnline] = useState<boolean>(true);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [pendingCount, setPendingCount] = useState<number>(0);
@@ -103,71 +105,143 @@ export function useSyncEngine(): SyncEngineState {
   const saveLocalPatient = useCallback(
     async (patientData: Omit<LocalPatient, 'id' | 'syncStatus' | 'createdAt'>): Promise<LocalPatient> => {
       const newId = `pat_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+      let syncStatus: 'synced' | 'pending_sync' = 'pending_sync';
+      let entityId = newId;
+
+      // 1. If online, attempt direct persistence to backend /api/patients
+      if (typeof window !== 'undefined' && navigator.onLine) {
+        try {
+          const res = await fetch('/api/patients', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...getAuthHeaders('ASHA'),
+            },
+            body: JSON.stringify({
+              id: newId,
+              ...patientData,
+            }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.patient?.id) {
+              entityId = data.patient.id;
+            }
+            syncStatus = 'synced';
+          }
+        } catch (netErr) {
+          console.warn('Direct server patient save failed, queueing offline:', netErr);
+        }
+      }
+
       const newPatient: LocalPatient = {
         ...patientData,
-        id: newId,
-        syncStatus: 'pending_sync',
+        id: entityId,
+        syncStatus,
         createdAt: new Date().toISOString(),
       };
 
+      // 2. Persist to Dexie / IndexedDB
       await offlineDb.patients.put(newPatient);
 
-      await offlineDb.syncQueue.add({
-        actionType: 'REGISTER_PATIENT',
-        entityId: newId,
-        payload: newPatient,
-        createdAt: Date.now(),
-        retryCount: 0,
-        status: 'pending',
-      });
+      // 3. Notify user that data is saved locally and available offline (only AFTER successful Dexie put)
+      notifyStoredLocally();
 
-      await refreshPendingCount();
+      // 4. Only queue for background sync if not already persisted to server
+      if (syncStatus === 'pending_sync') {
+        await offlineDb.syncQueue.add({
+          actionType: 'REGISTER_PATIENT',
+          entityId: newPatient.id,
+          payload: newPatient,
+          createdAt: Date.now(),
+          retryCount: 0,
+          status: 'pending',
+        });
 
-      // Trigger auto-sync if currently online
-      if (navigator.onLine) {
-        setTimeout(() => {
-          syncNow();
-        }, 300);
+        await refreshPendingCount();
+
+        // Trigger auto-sync if currently online
+        if (navigator.onLine) {
+          setTimeout(() => {
+            syncNow();
+          }, 300);
+        }
+      } else {
+        await refreshPendingCount();
       }
 
       return newPatient;
     },
-    [refreshPendingCount, syncNow]
+    [refreshPendingCount, syncNow, notifyStoredLocally]
   );
 
   // Save new clinical triage offline & queue sync
   const saveLocalEncounter = useCallback(
-    async (encounterData: Omit<LocalEncounter, 'id' | 'syncStatus'>): Promise<LocalEncounter> => {
+    async (encounterData: any): Promise<LocalEncounter> => {
       const newId = `enc_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+      let syncStatus: 'synced' | 'pending_sync' = 'pending_sync';
+
+      // 1. If online, attempt direct persistence to backend /api/encounters immediately
+      if (typeof window !== 'undefined' && navigator.onLine) {
+        try {
+          const res = await fetch('/api/encounters', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...getAuthHeaders('ASHA'),
+            },
+            body: JSON.stringify({
+              id: newId,
+              ...encounterData,
+              status: (encounterData as any).status || 'WAITING_FOR_DOCTOR',
+            }),
+          });
+          if (res.ok) {
+            syncStatus = 'synced';
+          }
+        } catch (netErr) {
+          console.warn('Direct server encounter save failed, queueing offline:', netErr);
+        }
+      }
+
       const newEncounter: LocalEncounter = {
         ...encounterData,
         id: newId,
-        syncStatus: 'pending_sync',
+        syncStatus,
       };
 
+      // 2. Persist to Dexie / IndexedDB
       await offlineDb.triageEncounters.put(newEncounter);
 
-      await offlineDb.syncQueue.add({
-        actionType: 'TRIAGE_ENCOUNTER',
-        entityId: newId,
-        payload: newEncounter,
-        createdAt: Date.now(),
-        retryCount: 0,
-        status: 'pending',
-      });
+      // 3. Notify user that encounter is saved locally and available offline
+      notifyStoredLocally();
 
-      await refreshPendingCount();
+      // 4. If offline/pending, queue for background sync
+      if (syncStatus === 'pending_sync') {
+        await offlineDb.syncQueue.add({
+          actionType: 'TRIAGE_ENCOUNTER',
+          entityId: newId,
+          payload: newEncounter,
+          createdAt: Date.now(),
+          retryCount: 0,
+          status: 'pending',
+        });
 
-      // Trigger auto-sync if online
-      if (navigator.onLine) {
-        setTimeout(() => {
-          syncNow();
-        }, 300);
+        await refreshPendingCount();
+
+        // Trigger auto-sync if connection restored
+        if (navigator.onLine) {
+          setTimeout(() => {
+            syncNow();
+          }, 300);
+        }
+      } else {
+        await refreshPendingCount();
       }
 
       return newEncounter;
     },
-    [refreshPendingCount, syncNow]
+    [refreshPendingCount, syncNow, notifyStoredLocally]
   );
 
   // Monitor online / offline events
@@ -180,12 +254,14 @@ export function useSyncEngine(): SyncEngineState {
     const handleOnline = () => {
       setIsOnline(true);
       setSyncError(null);
+      notifyOnline();
       // Auto-sync immediately upon reconnection
       syncNow();
     };
 
     const handleOffline = () => {
       setIsOnline(false);
+      notifyOffline();
     };
 
     window.addEventListener('online', handleOnline);
@@ -198,7 +274,7 @@ export function useSyncEngine(): SyncEngineState {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [refreshPendingCount, syncNow]);
+  }, [refreshPendingCount, syncNow, notifyOnline, notifyOffline]);
 
   return {
     isOnline,

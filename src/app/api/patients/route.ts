@@ -1,94 +1,92 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth/guards';
+import { clinicalData } from '@/lib/clinicalData';
 
 export async function GET(req: NextRequest) {
-  const { errorResponse } = await requireAuth(req, [
+  const { user, errorResponse } = await requireAuth(req, [
     'ASHA',
     'ANM',
     'MEDICAL_OFFICER',
     'DISTRICT_HEALTH_OFFICER',
     'ADMIN',
+    'PATIENT',
   ]);
   if (errorResponse) return errorResponse;
 
   try {
     const { searchParams } = new URL(req.url);
     const q = searchParams.get('q');
+    const requestedId = searchParams.get('id') || searchParams.get('patientId');
 
-    let patients;
-    if (q) {
-      patients = await prisma.patient.findMany({
-        where: {
-          OR: [
-            { abhaId: { contains: q } },
-            { name: { contains: q } },
-            { phone: { contains: q } },
-            { village: { contains: q } },
-          ],
-        },
-        orderBy: { createdAt: 'desc' },
-        include: {
-          encounters: {
-            orderBy: { encounterDate: 'desc' },
-            take: 3,
-          },
-        },
-      });
-    } else {
-      patients = await prisma.patient.findMany({
-        orderBy: { createdAt: 'desc' },
-        include: {
-          encounters: {
-            orderBy: { encounterDate: 'desc' },
-            take: 2,
-          },
-        },
-      });
+    // IDOR Protection: A patient can only view their own patient record!
+    if (user?.role === 'PATIENT') {
+      const authPatientId = user.patientId;
+      if (requestedId && authPatientId && requestedId !== authPatientId) {
+        return NextResponse.json(
+          { error: "Forbidden: You are not authorized to view another patient's records" },
+          { status: 403 }
+        );
+      }
+
+      const allPatients = await clinicalData.getPatients(q);
+      const effectiveId = requestedId || authPatientId;
+      const ownPatients = effectiveId
+        ? allPatients.filter((p) => p.id === effectiveId)
+        : allPatients;
+      return NextResponse.json({ patients: ownPatients });
     }
 
+    const patients = await clinicalData.getPatients(q);
     return NextResponse.json({ patients });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    console.error('Error fetching patients:', err);
+    return NextResponse.json({ error: err.message || 'Failed to fetch patients' }, { status: 500 });
   }
 }
 
 export async function POST(req: NextRequest) {
-  const { errorResponse } = await requireAuth(req, [
+  const { user, errorResponse } = await requireAuth(req, [
     'ASHA',
     'ANM',
     'MEDICAL_OFFICER',
     'ADMIN',
+    'PATIENT',
   ]);
   if (errorResponse) return errorResponse;
 
   try {
     const body = await req.json();
 
-    const patient = await prisma.patient.create({
-      data: {
-        abhaId: body.abhaId || `91-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}`,
-        abhaAddress: body.abhaAddress || `${(body.name || 'citizen').toLowerCase().replace(/\s+/g, '')}@abdm`,
-        name: body.name,
-        gender: body.gender || 'female',
-        age: parseInt(body.age) || 25,
-        birthDate: body.birthDate || null,
-        phone: body.phone,
-        guardianName: body.guardianName || null,
-        village: body.village || 'Bilaspur Gram',
-        subCentre: body.subCentre || 'Bilaspur Sub-Centre',
-        block: body.block || 'Bilha',
-        district: body.district || 'Bilaspur',
-        state: 'Chhattisgarh',
-        bloodGroup: body.bloodGroup || null,
-        isPregnant: Boolean(body.isPregnant),
-        gestationalWeeks: body.gestationalWeeks ? parseInt(body.gestationalWeeks) : null,
-        edd: body.edd || null,
-      },
-    });
+    // If registering as a PATIENT, check if this mobile number is already linked to another patient account
+    if (user?.role === 'PATIENT' && body.phone) {
+      const cleanPhone = String(body.phone).replace(/\D/g, '').slice(-10);
+      if (cleanPhone.length === 10) {
+        const allPatients = await clinicalData.getPatients();
+        const existingWithPhone = allPatients.find(
+          (p) => p.phone && String(p.phone).replace(/\D/g, '').endsWith(cleanPhone)
+        );
+        if (existingWithPhone && (!body.id || existingWithPhone.id !== body.id)) {
+          return NextResponse.json(
+            {
+              error: 'This mobile number is already linked to an ArogyaMitra account.',
+              errorMr: 'या मोबाईल नंबरशी आधीच आरोग्य खाते जोडलेले आहे.',
+              code: 'PHONE_ALREADY_LINKED',
+              existingPatient: {
+                id: existingWithPhone.id,
+                name: existingWithPhone.name,
+                phone: existingWithPhone.phone,
+              },
+            },
+            { status: 409 }
+          );
+        }
+      }
+    }
 
+    const patient = await clinicalData.createPatient(body);
     return NextResponse.json({ patient }, { status: 201 });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    console.error('Error creating patient:', err);
+    return NextResponse.json({ error: err.message || 'Failed to create patient' }, { status: 500 });
   }
 }
